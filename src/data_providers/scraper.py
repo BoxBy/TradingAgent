@@ -100,12 +100,23 @@ def get_nasdaq_tickers():
         log.error(f"Failed to fetch NASDAQ tickers: {e}")
         return pd.DataFrame()
 
+def main():
+    log.info("Starting stock list scraping...")
+    
+    # Scrape and save NASDAQ tickers
+    scrape_and_save_nasdaq_tickers()
+
+    # Scrape and save KOSPI tickers
+    try:
+        kospi_df = get_kospi_tickers()
+        if not kospi_df.empty:
+            file_path = os.path.join(config.DATA_DIR, 'kospi_tickers.csv')
+            kospi_df.to_csv(file_path, index=False)
+            log.info(f"Successfully saved {len(kospi_df)} KOSPI tickers to {file_path}")
+        else:
+            log.warning("KOSPI ticker DataFrame is empty. No KOSPI tickers saved.")
+    except Exception as e:
+        log.error(f"Failed to fetch KOSPI tickers: {e}", exc_info=True)
 
 if __name__ == '__main__':
-    print("Starting stock list scraping...")
-    kospi_df = get_kospi_tickers()
-    print(kospi_df)
-    if not kospi_df.empty:
-        file_path = os.path.join(config.DATA_DIR, 'kospi_tickers.csv')
-        kospi_df.to_csv(file_path, index=False)
-        print(f"Successfully saved {len(kospi_df)} KOSPI tickers to {file_path}")
+    main()
