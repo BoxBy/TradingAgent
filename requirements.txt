@@ -7,7 +7,7 @@ scipy
 # Trading and Financial Data APIs
 korea-investment-stock>=0.1.10
 finnhub-python
-yfinance  
+yfinance
 scikit-learn
 pykis
 

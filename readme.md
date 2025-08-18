@@ -195,7 +195,7 @@ SLACK_BOT_TOKEN="..."
     python src/data_providers/scraper.py
     ```
     이 명령은 `data/kospi_tickers.csv`와 `data/nasdaq_tickers.csv` 파일을 생성합니다.
-  
+
 
 3.  **봇 실행**
     프로젝트 최상위 폴더(`TradingAgent/`)에서 다음 명령어를 실행합니다.
@@ -208,7 +208,6 @@ SLACK_BOT_TOKEN="..."
 
 ### 📁 프로젝트 구조
 
-```
 ```
 TradingAgent/
 ├── data/                 # KOSPI, NASDAQ 종목 리스트 등 데이터 파일 저장
@@ -229,7 +228,6 @@ TradingAgent/
 ├── api.env               # (직접 생성) 모든 API 키를 저장하는 파일
 ├── requirements.txt      # 프로젝트 의존성 라이브러리 목록
 └── run_bot.py            # 봇을 실행하는 메인 파일
-```
 ```
 
 -----

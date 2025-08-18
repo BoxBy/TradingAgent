@@ -139,3 +139,10 @@ error_stats.json
 
 # Environment variables
 api.env
+
+# Untracked files
+.idea/
+asset_baseline.json
+kospi_code.mst
+kospi_code.mst.zip
+settings.json

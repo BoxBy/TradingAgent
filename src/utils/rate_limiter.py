@@ -1,13 +1,16 @@
 import time
 from functools import wraps
+
 from . import logger
 
 log = logger.get_logger(__name__)
+
 
 class RateLimiter:
     """
     API의 초당 요청 횟수를 제어하는 클래스.
     """
+
     def __init__(self, requests_per_second: int = 19):
         # KIS API의 초당 요청 제한은 20회이므로, 안전 마진을 두어 19회로 설정합니다.
         self.interval = 1.0 / requests_per_second
@@ -28,7 +31,9 @@ class RateLimiter:
             result = func(*args, **kwargs)
             self.last_call_time = time.monotonic()
             return result
+
         return wrapper
+
 
 # 프로그램 전체에서 사용할 KIS API용 전역 RateLimiter 인스턴스를 생성합니다.
 kis_api_rate_limiter = RateLimiter()
