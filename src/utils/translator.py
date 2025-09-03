@@ -48,4 +48,4 @@ def translate_to_korean_if_needed(message: str) -> str:
     except Exception as e:
         print(f"DeepL 번역 실패: {e}")
         # 번역 실패 시 원본 메시지에 실패 정보를 추가하여 반환
-        return f"{message}\n\n(DeepL 번역 실패)"
+        return f"{message}"

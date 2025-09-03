@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 
 from .. import config
-from ..agents.market import EmergencyNewsAgent  # ✨ 수정된 클래스명 import
-from ..agents.market import MarketConditionAgent
+from ..agents.market import (
+    EmergencyNewsAgent,  # ✨ 수정된 클래스명 import
+    MarketConditionAgent,
+)
 from ..data_providers import DataIngestion, TradingInterface
 from ..utils import logger, notification
 from ..utils.market_utils import is_kr_market_open, is_us_market_open

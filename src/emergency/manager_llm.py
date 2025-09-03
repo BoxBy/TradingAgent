@@ -7,6 +7,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from ..core import TradeMonitor
 from ..data_providers import TradingInterface
 from ..utils import logger, notification
+from .. import prompts
 
 log = logger.get_logger(__name__)
 
@@ -104,30 +105,26 @@ class EmergencyManagerSystem2:
 
     def _identify_affected_stocks(self, event: str, portfolio: list) -> list:
         prompt = ChatPromptTemplate.from_template(
-            'An emergency market event has occurred: "{event}"\n'
-            "From the following list of stocks in my portfolio, which ones are most likely to be directly affected?\n"
-            "Portfolio: {portfolio}\n"
-            'Return your answer as a JSON list of stock codes. If none, return an empty list. Example: ["AAPL", "GOOGL"]'
+            prompts.IDENTIFY_AFFECTED_STOCKS_PROMPT
         )
         chain = prompt | self.llm | StrOutputParser()
         response_str = chain.invoke({"event": event, "portfolio": ", ".join(portfolio)})
         try:
             return json.loads(response_str)
-        except Exception:
+        except json.JSONDecodeError as e:
+            log.error(
+                f"Failed to parse JSON in _identify_affected_stocks: {response_str}. Error: {e}"
+            )
             return []
 
     def _analyze_impact(self, event: str, stock_code: str) -> dict:
-        prompt = ChatPromptTemplate.from_template(
-            'For the stock {stock_code}, analyze the impact of the event: "{event}"\n'
-            "Is this a positive catalyst (호재) or a negative risk (악재)?\n"
-            "- If negative, it should be sold immediately.\n"
-            "- If positive, we should readjust the target gain and sell deadline for higher profits.\n"
-            "Provide your analysis in a structured JSON format.\n"
-            'JSON Output: {{"impact": "positive" or "negative", "reasoning": "...", "new_target_gain_percentage": <float, if positive>, "new_sell_deadline_date": "<YYYY-MM-DD, if positive>"}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.ANALYZE_IMPACT_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = chain.invoke({"event": event, "stock_code": stock_code})
         try:
             return json.loads(response_str)
-        except Exception:
+        except json.JSONDecodeError as e:
+            log.error(
+                f"Failed to parse JSON in _analyze_impact: {response_str}. Error: {e}"
+            )
             return {"impact": "unknown"}

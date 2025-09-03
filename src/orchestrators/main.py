@@ -1,5 +1,6 @@
 import json
 from typing import Dict, List
+from datetime import datetime
 
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -16,6 +17,7 @@ from ..agents.stock import (
 from ..core import PortfolioOptimizer
 from ..services import RAGManager
 from ..utils import logger
+from .. import prompts
 
 log = logger.get_logger(__name__)
 
@@ -48,6 +50,11 @@ class TradingOrchestrator:
         # 1. 각 종목에 대한 개별 분석을 먼저 수행합니다.
         comprehensive_analyses = {}
         for stock_code, data_bundle in all_stocks_data.items():
+            recent_review_history = self.rag_manager.retrieve_relevant_analysis(
+                stock_code,
+                "Recent portfolio review decisions for this stock.",
+                n_results=3,
+            )
             comprehensive_analyses[stock_code] = {
                 "technical_indicator_analysis": self.technical_agent.analyze(
                     data_bundle.get("ohlcv")
@@ -64,6 +71,7 @@ class TradingOrchestrator:
                 "qualitative_analysis": self.qualitative_agent.analyze(
                     data_bundle.get("fundamentals"), data_bundle.get("news")
                 ),
+                "recent_review_history": recent_review_history,
             }
 
         # 2. 모든 분석 결과를 종합하여 최종 결정을 내리는 LLM 에이전트를 호출합니다.
@@ -133,44 +141,15 @@ class TradingOrchestrator:
 
         prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    "You are a self-improving, highly aggressive, short-term momentum trader AI. "
-                    "Your goal is to maximize profits by acting decisively on market catalysts. "
-                    "Your primary focus is on short-term (days to weeks) gains. "
-                    "You are willing to take on calculated risks for higher returns. "
-                    "Analyze the batch of stocks and decide which ones to BUY or SELL based on the provided analyses and user rules. "
-                    "Prioritize stocks with strong positive news sentiment and bullish technical indicators. "
-                    "If a stock has negative news or bearish signals, decide to SELL if it's in the portfolio. "
-                    "If information is insufficient or neutral, your decision should be 'HOLD'.\n\n"
-                    "**CRITICAL INSTRUCTIONS:**\n"
-                    "1.  For **every** stock, you **MUST** provide a `conviction_score` from -10 (Strong Sell) to +10 (Strong Buy).\n"
-                    "2.  Review 'Past Trading Insights'. Use these successes and failures to inform your scores.\n"
-                    "3.  For each stock, provide a 'decision', 'reasoning', 'target_gain_percentage' (if BUY), "
-                    "'stop_loss_percentage' (if BUY), and 'sell_deadline_date' (if BUY).\n\n"
-                    "Your final output **MUST** be a single, valid JSON object with a 'decisions' key holding a list of plans.\n\n"
-                    "JSON Output Format:\n"
-                    '{{ "decisions": [ \n'
-                    '  {{ "stock_code": "<TICKER1>", "decision": "BUY"|"SELL"|"HOLD", "conviction_score": <float>, "quantity": <int>, '
-                    '"target_gain_percentage": <float, if BUY>, '
-                    '"stop_loss_percentage": <float, if BUY>, '
-                    '"sell_deadline_date": "<YYYY-MM-DD, if BUY>", "reasoning": "..." }},\n'
-                    '  {{ "stock_code": "<TICKER2>", ... }}\n'
-                    "]}}",
-                ),
-                (
-                    "human",
-                    "Analyze the following stocks and provide your trading decisions.\n"
-                    "Account Status: {account_status}\n"
-                    "User Investment Rules (currently set to '{trading_style}' style): {user_rules}\n"
-                    "**Past Trading Insights (Learn from these!):**\n{past_insights}\n"
-                    "Comprehensive Analyses for all stocks:\n{comprehensive_analyses}",
-                ),
+                ("system", prompts.FINAL_BATCH_DECISION_SYSTEM_PROMPT),
+                ("human", prompts.FINAL_BATCH_DECISION_HUMAN_PROMPT),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
 
-        agent = create_tool_calling_agent(self.llm.provider, self.tools, prompt)
+        agent = create_tool_calling_agent(
+            self.llm.provider.get_llm(), self.tools, prompt
+        )
         agent_executor = AgentExecutor(
             agent=agent, tools=self.tools, verbose=True, handle_parsing_errors=True
         )
@@ -179,14 +158,13 @@ class TradingOrchestrator:
         try:
             response = agent_executor.invoke(
                 {
+                    "current_date": datetime.now().strftime("%Y-%m-%d"),
                     "account_status": json.dumps(balance),
                     "trading_style": config.TRADING_STYLE,
                     "user_rules": json.dumps(config.USER_RULES),
-                    "past_insights": (
-                        "\n".join(relevant_insights)
-                        if relevant_insights
-                        else "No past insights available."
-                    ),
+                    "past_insights": "\n".join(relevant_insights)
+                    if relevant_insights
+                    else "No past insights available.",
                     "comprehensive_analyses": json.dumps(analyses, default=str),
                 }
             )

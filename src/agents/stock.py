@@ -6,6 +6,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from ..utils import logger
+from .. import prompts
 
 log = logger.get_logger(__name__)
 
@@ -74,11 +75,7 @@ class SentimentAnalysisAgent(BaseAgent):
             return {"error": "No news data available."}
         log.info("Running Sentiment Analysis Agent...")
         headlines = [f"Headline: {news['headline']}" for news in news_list[:20]]
-        prompt = ChatPromptTemplate.from_template(
-            "You are a financial sentiment analyst. Analyze these news headlines: {news_headlines}. "
-            "Determine the overall sentiment (Positive, Negative, Neutral) and top 3 key themes. "
-            'Respond in JSON format: {{"overall_sentiment": "...", "sentiment_score": -1.0 to 1.0, "summary": "..."}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.SENTIMENT_ANALYSIS_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -113,11 +110,7 @@ class FundamentalAnalysisAgent(BaseAgent):
         if not fundamental_data:
             return {"error": "No fundamental data available."}
         log.info("Running Fundamental Analysis Agent...")
-        prompt = ChatPromptTemplate.from_template(
-            "You are a senior financial analyst. Analyze this company profile: {data}. "
-            "Assess its financial health, valuation, and profitability. "
-            'Respond in JSON format: {{"financial_health": "...", "valuation_summary": "..."}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.FUNDAMENTAL_ANALYSIS_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -154,11 +147,7 @@ class QualitativeAnalysisAgent(BaseAgent):
             return {"error": "No qualitative data available."}
         log.info("Running Qualitative Analysis Agent...")
         news_headlines = [news["headline"] for news in company_news[:10]]
-        prompt = ChatPromptTemplate.from_template(
-            "You are a business strategy consultant. Analyze the company profile: {profile} and recent news: {news}. "
-            "Assess its competitive moat and management quality. "
-            'Respond in JSON format: {{"competitive_moat": "...", "management_quality": "..."}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.QUALITATIVE_ANALYSIS_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -198,13 +187,7 @@ class ChartPatternAgent(BaseAgent):
             return {"summary": "Not enough chart data to analyze."}
         log.info("Running Chart Pattern Analysis Agent...")
         recent_data = ohlcv_df.tail(60).to_string()
-        prompt = ChatPromptTemplate.from_template(
-            "You are a master chartist. Analyze the following OHLCV data to identify key patterns. "
-            "Focus on support/resistance levels, trend lines, and major formations (e.g., golden cross).\n\n"
-            "OHLCV Data (last 60 days):\n{chart_data}\n\n"
-            "Provide a concise summary of your findings. "
-            "Example: 'The stock is in a clear uptrend, finding support near $150. Resistance is at $175.'"
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.CHART_PATTERN_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         try:
             summary = chain.invoke({"chart_data": recent_data})

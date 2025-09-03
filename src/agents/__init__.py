@@ -1,4 +1,9 @@
-from .market import MarketConditionAgent, NewsScreenerAgent, PortfolioReviewAgent
+from .market import (
+    EmergencyNewsAgent,
+    MarketConditionAgent,
+    NewsScreenerAgent,
+    PortfolioReviewAgent,
+)
 from .stock import (
     BaseAgent,
     ChartPatternAgent,
@@ -10,6 +15,7 @@ from .stock import (
 from .tools import StockAnalysisTools
 
 __all__ = [
+    "EmergencyNewsAgent",
     "MarketConditionAgent",
     "NewsScreenerAgent",
     "PortfolioReviewAgent",

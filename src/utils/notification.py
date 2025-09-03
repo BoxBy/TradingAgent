@@ -31,7 +31,7 @@ def send_notification(message: str, channel: str = "#stock_report"):
         response = requests.post(webhook_url, json=payload, timeout=5)
         response.raise_for_status()
 
-        log.info(f"Notification sent to Slack: {message}")
+        log.info(f"Notification sent to Slack: {translated_message}")
 
     except Exception as e:
         log.error(f"Failed to send Slack notification: {e}")

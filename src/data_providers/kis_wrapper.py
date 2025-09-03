@@ -19,7 +19,6 @@ class TradingInterface:
     """
 
     def __init__(self, mock_trading: bool = config.MOCK_TRADING):
-        # ... (기존 __init__ 코드는 변경 없음) ...
         self.mock_trading = mock_trading
         self.broker = None
         self.currency_converter = CurrencyRates()  # 환율 변환기 인스턴스 생성

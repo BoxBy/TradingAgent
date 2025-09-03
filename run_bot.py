@@ -197,8 +197,8 @@ def run_decision_process(
                         )
 
                     investment_amount = min(
-                        balance_info.get("cash_balance", 0) * 0.1,
-                        config.USER_RULES.get("max_investment_per_stock", 1000000),
+                        balance_info.get("cash_balance", 0) * 0.7,
+                        config.USER_RULES.get("max_investment_per_stock", 50000000),
                     )
                     quantity = (
                         int(investment_amount / current_price)
@@ -338,6 +338,9 @@ def deep_portfolio_review_job(
 ):
     log.info("--- Running Deep Portfolio Review Job ---")
 
+    log.info("슬랙으로 로그 파일을 전송합니다.")
+    notification.send_log_file_to_slack()
+
     # ✨ 1. 현재 열려있는 시장을 확인합니다.
     active_market = None
     if is_kr_market_open():
@@ -408,6 +411,10 @@ def deep_portfolio_review_job(
             if not review_result:
                 continue
 
+            trade_monitor.rag_manager.add_analysis_to_db(
+                stock_code, json.dumps(review_result, default=str)
+            )
+
             conviction_score = review_result.get("conviction_score")
 
             # ✨ 4. 확신 점수가 매도 임계값보다 낮으면 매도 실행
@@ -443,8 +450,7 @@ def deep_portfolio_review_job(
                 # ✨ 5. 매도하지 않으면 전략 업데이트 시도
                 trade_monitor.update_trade_parameters(stock_code, review_result)
 
-        log.info("포트폴리오 리뷰 완료. 슬랙으로 로그 파일을 전송합니다.")
-        notification.send_log_file_to_slack()
+        log.info("포트폴리오 리뷰 완료.")
 
     except Exception as e:
         log.error(f"Error in deep portfolio review job: {e}", exc_info=True)

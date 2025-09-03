@@ -6,6 +6,7 @@ from langchain.schema.output_parser import StrOutputParser
 
 from ..utils import logger
 from .stock import BaseAgent
+from .. import prompts
 
 log = logger.get_logger(__name__)
 
@@ -22,13 +23,7 @@ class NewsScreenerAgent(BaseAgent):
 
         headlines = [f"- {news['headline']}" for news in general_news[:100]]
 
-        prompt = ChatPromptTemplate.from_template(
-            "You are a financial analyst. From the following list of recent news headlines, "
-            "extract all mentioned or clearly implied US stock tickers (e.g., AAPL, MSFT) and South Korean stock codes (6-digit numbers, e.g., 005930). "
-            "Focus only on company-specific news. "
-            "Respond ONLY with a single JSON object containing two keys: 'us_tickers' and 'kr_tickers'.\n"
-            'Example: {{"us_tickers": ["NVDA", "TSLA"], "kr_tickers": ["005930", "035720"]}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.NEWS_SCREENER_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -78,23 +73,7 @@ class MarketConditionAgent(BaseAgent):
     ) -> dict:
         log.info("Running Market Condition Agent to determine dynamic thresholds...")
         headlines = [f"- {news['headline']}" for news in general_news[:20]]
-        prompt = ChatPromptTemplate.from_template(
-            """You are a top-tier hedge fund's chief risk officer. Your task is to analyze the current market condition and set the risk parameters for our trading bot.
-
-Current Market Data:
-- Current VIX Index: {vix_value:.2f}
-- Current S&P 500 Index: {market_index_value:,.2f}
-- Recent Market News Headlines:
-{news_headlines}
-
-Based on this context, determine the following three parameters:
-1.  `dynamic_vix_threshold`: A VIX value above which we should consider emergency protocols. (Standard is 35).
-2.  `buy_conviction_threshold`: The minimum conviction score (from 1 to 10) our bot needs to initiate a BUY. (Standard is 6. Lower it to be more aggressive in bull markets, raise it to be more cautious in bear markets).
-3.  `sell_conviction_threshold`: The maximum conviction score (from -10 to -1) to trigger a SELL. (Standard is -6. Raise it (e.g., to -4) to sell more easily in risky markets).
-
-Respond ONLY with a single JSON object.
-Example: {{"dynamic_vix_threshold": 32.0, "buy_conviction_threshold": 7, "sell_conviction_threshold": -5, "reasoning": "Increased market volatility and negative news suggest a more cautious stance."}}"""
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.MARKET_CONDITION_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -140,45 +119,7 @@ class PortfolioReviewAgent(BaseAgent):
     ) -> dict:
         log.info(f"Running deep portfolio review for {stock_code}...")
 
-        prompt_template = """You are a 'Devil\'s Advocate' risk manager. Your job is to critically challenge the initial investment thesis for a stock we currently hold.
-Synthesize all provided data: initial reasoning, current analysis, and historical context from our RAG database.
-
-**Stock:** {stock_code}
-
-**1. Initial Purchase Reasoning:**
----
-{initial_reasoning}
----
-
-**2. Current Situation Analysis (Today's Data):**
----
-{current_analysis}
----
-
-**3. Historical Context from RAG Database:**
-- Past Analyses: {historical_analysis}
-- Relevant Past News: {relevant_news}
-
-**Your Tasks:**
-1.  **Re-evaluate Validity:** Is the initial reasoning still valid considering all current and historical data?
-2.  **Identify New Risks:** What are the strongest bearish signals or new risks right now?
-3.  **Provide Conviction Score:** Give a `conviction_score` from -10 (Immediate Sell) to 10 (Strong Hold). This score will be used to trigger a sale if it falls below a dynamic threshold.
-4.  **Recommend Adjustments (If Holding):** If the decision is to continue holding, should we adjust our strategy? Propose new values for `new_target_gain_percentage` and `new_stop_loss_value` if market conditions have changed.
-
-**Respond ONLY with a single JSON object with the following structure.**
-- If selling is recommended, the new parameter fields can be null.
-- If no change is needed for a parameter, its value should be null.
-
-**Example JSON Output:**
-{{
-  "stock_code": "{stock_code}",
-  "conviction_score": -8.5,
-  "recommendation_summary": "The competitive landscape has shifted negatively. Initial catalyst is no longer valid.",
-  "new_target_gain_percentage": null,
-  "new_stop_loss_value": null
-}}
-"""
-        prompt = ChatPromptTemplate.from_template(prompt_template)
+        prompt = ChatPromptTemplate.from_template(prompts.PORTFOLIO_REVIEW_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:
@@ -238,16 +179,7 @@ class EmergencyNewsAgent(BaseAgent):
             for news in news_list[:10]
         ]  # 최근 뉴스 10개 분석
 
-        prompt = ChatPromptTemplate.from_template(
-            "You are a highly experienced risk analyst for a trading firm. Your task is to determine if recent news about a specific stock constitutes a critical, immediate emergency that requires liquidating the position. "
-            "An emergency is defined as news that fundamentally undermines the company's value or viability, such as bankruptcy, major fraud, delisting, critical product recalls, or lawsuits that threaten solvency. "
-            "Do not overreact to normal market volatility, analyst downgrades, or minor negative events.\n\n"
-            "Stock: {stock_code}\n"
-            "Recent News:\n"
-            "{news_headlines}\n\n"
-            "Based on the news, is this a critical emergency requiring immediate liquidation? "
-            'Respond ONLY with a single JSON object in the format: {{"is_emergency": <true_or_false>, "reason": "<Provide a concise reason ONLY IF it is an emergency>"}}'
-        )
+        prompt = ChatPromptTemplate.from_template(prompts.EMERGENCY_NEWS_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         response_str = ""
         try:

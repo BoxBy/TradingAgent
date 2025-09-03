@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 
 from ..data_providers import DataIngestion
+
+# ✨ 순환 참조를 일으키는 아래 라인을 삭제합니다.
+# from ..orchestrators import TradingOrchestrator
 from ..utils import logger
 
 log = logger.get_logger(__name__)
