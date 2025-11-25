@@ -1,0 +1,33 @@
+# Core Libraries
+python-dotenv
+pandas
+numpy
+scipy
+
+# Trading and Financial Data APIs
+korea-investment-stock>=0.1.10
+finnhub-python
+yfinance  
+pykis
+
+# AI and LLM Framework
+openai
+langchain
+langchain-openai
+langchain-google-genai
+transformers
+torch
+
+# Vector Database for RAG
+chromadb
+
+# Technical Analysis
+pandas-ta
+
+# Data Export & Visualization
+openpyxl
+mplfinance
+
+# Scheduling
+schedule
+holidays
