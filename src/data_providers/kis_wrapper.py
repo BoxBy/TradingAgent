@@ -585,3 +585,210 @@ class TradingInterface:
         except Exception as e:
             log.error(f"Error placing SELL order for {stock_code}: {e}")
             return False  # 변경: None -> False
+
+    # --- Phase 1: Fundamental Data Methods with Caching ---
+
+    def _get_cached_data(self, key: str, ttl_seconds: int = 86400):
+        """Simple memory cache getter"""
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        
+        if key in self._cache:
+            data, timestamp = self._cache[key]
+            if time.time() - timestamp < ttl_seconds:
+                return data
+            else:
+                del self._cache[key]
+        return None
+
+    def _set_cached_data(self, key: str, data: any):
+        """Simple memory cache setter"""
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        self._cache[key] = (data, time.time())
+
+    @kis_api_rate_limiter
+    def get_stock_basic_info(self, stock_code: str) -> dict:
+        """
+        국내주식 주식기본조회 (현재가 시세2 TR 활용)
+        PER, PBR, EPS, BPS, 시가총액 등을 포함한 상세 정보를 반환합니다.
+        """
+        if not self.broker:
+            return {}
+        
+        # Cache check
+        cache_key = f"basic_info_{stock_code}"
+        cached = self._get_cached_data(cache_key, ttl_seconds=3600) # 1 hour TTL for basic info
+        if cached:
+            return cached
+
+        try:
+
+            # FHKST01010100 (주식현재가시세) - Provides PER, PBR, Market Cap
+            url_path = "/uapi/domestic-stock/v1/quotations/inquire-price"
+            tr_id = "FHKST01010100"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": stock_code
+            }
+            req = APIRequestParameter(url_path, tr_id, params)
+            
+            res = self.broker._send_get_request(req)
+            if res and res.body:
+                if isinstance(res.body, dict):
+                    # Check for rate limit error in body
+                    rt_cd = res.body.get("rt_cd", "")
+                    msg = res.body.get("msg1", "")
+                    if rt_cd != "0" and "초당 거래건수" in msg:
+                        log.warning(f"Rate limit exceeded for basic info {stock_code}")
+                        return {}
+
+                data = res.body.get("output") or {}
+                if data:
+                    self._set_cached_data(cache_key, data)
+                    return data
+            
+            return {}
+        except Exception as e:
+            log.error(f"Error fetching stock basic info for {stock_code}: {e}")
+            return {}
+
+    @kis_api_rate_limiter
+    def get_investment_opinion(self, stock_code: str) -> dict:
+        """
+        국내주식 종목투자의견 (CTPF1604R)
+        실전 투자 계좌에서만 가능.
+        """
+        if not self.broker or self.mock_trading:
+            return {}
+
+        cache_key = f"invest_opinion_{stock_code}"
+        cached = self._get_cached_data(cache_key)
+        if cached:
+            return cached
+
+        try:
+            # URL and TR ID based on search results
+            url_path = "/uapi/domestic-stock/v1/quotations/search-info"
+            tr_id = "CTPF1604R"
+            params = {
+                "PDNO": stock_code,
+                "PRDT_TYPE_CD": "300"
+            }
+            
+            req = APIRequestParameter(url_path, tr_id, params)
+            res = self.broker._send_get_request(req)
+            
+            if res and res.body and "output" in res.body:
+                data = res.body["output"]
+                self._set_cached_data(cache_key, data)
+                return data
+            return {}
+
+        except Exception as e:
+            log.warning(f"Error fetching investment opinion for {stock_code}: {e}")
+            return {}
+
+    @kis_api_rate_limiter
+    def get_financial_ratios(self, stock_code: str) -> dict:
+        if not self.broker:
+            return {}
+        
+        cache_key = f"financial_ratios_{stock_code}"
+        cached = self._get_cached_data(cache_key, ttl_seconds=86400)
+        if cached:
+            return cached
+
+        try:
+            # 국내주식 재무비율 API
+            # TR ID: FHKST66430300
+            url_path = "/uapi/domestic-stock/v1/finance/financial-ratio"
+            tr_id = "FHKST66430300"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": stock_code,
+                "FID_DIV_CLS_CODE": "1",
+            }
+            
+            req = APIRequestParameter(url_path, tr_id, params)
+            res = self.broker._send_get_request(req)
+            
+            if res and res.body:
+                data = res.body.get("output") or {}
+                if data:
+                    self._set_cached_data(cache_key, data)
+                    return data
+            
+            return {}
+        except Exception as e:
+            log.error(f"Error fetching financial ratios for {stock_code}: {e}")
+            return {}
+
+    @kis_api_rate_limiter
+    def get_balance_sheet(self, stock_code: str) -> dict:
+        if not self.broker:
+            return {}
+        
+        cache_key = f"balance_sheet_{stock_code}"
+        cached = self._get_cached_data(cache_key, ttl_seconds=86400)
+        if cached:
+            return cached
+
+        try:
+            # 국내주식 대차대조표 API
+            # TR ID: FHKST66430100
+            url_path = "/uapi/domestic-stock/v1/finance/balance-sheet"
+            tr_id = "FHKST66430100"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": stock_code,
+                "FID_DIV_CLS_CODE": "1",
+            }
+            
+            req = APIRequestParameter(url_path, tr_id, params)
+            res = self.broker._send_get_request(req)
+            
+            if res and res.body and "output" in res.body:
+                data = res.body["output"]
+                self._set_cached_data(cache_key, data)
+                return data
+            return {}
+        except Exception as e:
+            log.warning(f"Error fetching balance sheet for {stock_code}: {e}")
+            return {}
+
+    @kis_api_rate_limiter
+    def get_income_statement(self, stock_code: str) -> dict:
+        if not self.broker:
+            return {}
+        
+        cache_key = f"income_statement_{stock_code}"
+        cached = self._get_cached_data(cache_key, ttl_seconds=86400)
+        if cached:
+            return cached
+
+        try:
+            # 국내주식 손익계산서 API
+            # TR ID: FHKST66430200
+            url_path = "/uapi/domestic-stock/v1/finance/income-statement"
+            tr_id = "FHKST66430200"
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": stock_code,
+                "FID_DIV_CLS_CODE": "1",
+            }
+            
+            req = APIRequestParameter(url_path, tr_id, params)
+            res = self.broker._send_get_request(req)
+            
+            if res and res.body and "output" in res.body:
+                data = res.body["output"]
+                self._set_cached_data(cache_key, data)
+                return data
+            return {}
+        except Exception as e:
+            log.warning(f"Error fetching income statement for {stock_code}: {e}")
+            return {}
+
+
+

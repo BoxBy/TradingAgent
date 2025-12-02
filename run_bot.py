@@ -139,7 +139,7 @@ def run_decision_process(
 
                 if all_tickers_list:
                     # 2. 추가할 랜덤 종목 수 계산
-                    num_random_to_add = int(len(watchlist) * 0.15)
+                    num_random_to_add = max(1, int(len(watchlist) * 0.5))
                     if num_random_to_add > 0:
                         # 3. 후보군 생성
                         candidate_pool = [
@@ -160,20 +160,46 @@ def run_decision_process(
         tools = StockAnalysisTools(data_ingestor, llm=llm_provider).get_tools()
         orchestrator = TradingOrchestrator(rag_manager, llm_provider, tools)
 
-        all_stocks_data = {
-            stock: {
-                "ohlcv": data_ingestor.get_technical_data(stock, market=market_type),
-                "news": data_ingestor.get_company_news(
-                    stock,
-                    (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d"),
-                    datetime.now().strftime("%Y-%m-%d"),
-                ),
-                "fundamentals": data_ingestor.get_fundamental_data(stock),
+        recent_start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        recent_end_date = datetime.now().strftime("%Y-%m-%d")
+        all_stocks_data = {}
+        for stock in watchlist:
+            if stock in trade_monitor.active_trades:
+                continue
+            ohlcv = data_ingestor.get_technical_data(stock, market=market_type)
+            company_news = data_ingestor.get_company_news(
+                stock,
+                recent_start_date,
+                recent_end_date,
+            )
+            stock_name = ticker_utils.get_stock_name(stock)
+            related_news = []
+            for news in unprocessed_news:
+                headline = news.get("headline") or ""
+                summary = news.get("summary") or ""
+                if stock_name and stock_name in headline:
+                    related_news.append(news)
+                elif stock in headline:
+                    related_news.append(news)
+                elif stock_name and stock_name in summary:
+                    related_news.append(news)
+            combined_news = []
+            if company_news:
+                combined_news.extend(company_news)
+            if related_news:
+                combined_news.extend(related_news)
+
+            fundamental_symbol = stock
+            if market_type == "KR":
+                fundamental_symbol = f"{stock}.KS"
+            fundamentals = data_ingestor.get_fundamental_data(fundamental_symbol)
+
+            all_stocks_data[stock] = {
+                "ohlcv": ohlcv,
+                "news": combined_news,
+                "fundamentals": fundamentals,
                 "current_price": kis_api.fetch_price(stock, market=market_type),
             }
-            for stock in watchlist
-            if stock not in trade_monitor.active_trades
-        }
 
         if not all_stocks_data:
             log.info("No new stocks to analyze.")
@@ -212,12 +238,16 @@ def run_decision_process(
             cash_balance = raw_cash_balance
 
         # config.py에서 설정한 최소 보유 현금 비율을 가져옵니다.
-        # 각 시장 의사결정 시, 해당 시장 자산 규모를 기준으로 예비금을 계산합니다.
+        # 각 시장 의사결정 시, 해당 시장 "보유 종목 자산"을 기준으로 예비금을 계산합니다.
+        # 보유 종목이 전혀 없다면, 예비금을 0으로 두고 현금 전액을 투자 가능 금액으로 간주합니다.
         min_reserve_ratio = config.USER_RULES.get("min_cash_reserve_ratio", 0.2)
+        portfolio_kr = balance_info.get("portfolio_kr") or []
+        portfolio_us = balance_info.get("portfolio_us") or []
+
         if market_type == "KR":
-            base_assets_for_reserve = kr_assets or total_assets
+            base_assets_for_reserve = kr_assets if portfolio_kr else 0
         elif market_type == "US":
-            base_assets_for_reserve = us_assets or total_assets
+            base_assets_for_reserve = us_assets if portfolio_us else 0
         else:
             base_assets_for_reserve = total_assets
 
@@ -744,8 +774,15 @@ def deep_portfolio_review_job(
                         del trade_monitor.active_trades[stock_code]
                         trade_monitor._save_state()
             else:
-                # ✨ 5. 매도하지 않으면 전략 업데이트 시도
+                # ✨ 5. 매도하지 않으면 전략 업데이트 시도 + Slack 알림 전송
                 trade_monitor.update_trade_parameters(stock_code, review_result)
+                try:
+                    summary = review_result.get("recommendation_summary") or review_result.get("summary") or "No summary provided."
+                    notification.send_notification(
+                        f"📊 [Deep Portfolio Review] {ticker_utils.format_for_slack(stock_code)}: Conviction Score {conviction_score}.\n> Summary: {summary}"
+                    )
+                except Exception as e:
+                    log.warning(f"Failed to send Slack notification for deep review (non-sell) {stock_code}: {e}")
 
         if analyses_to_add:
             trade_monitor.rag_manager.add_analyses_to_db(analyses_to_add)
@@ -1167,11 +1204,19 @@ if __name__ == "__main__":
         )
         close_job = partial(run_daily_close_process, shared_kis_api)
 
-        schedule.every(10).minutes.do(news_job)
-        schedule.every(15).minutes.do(kr_job)
-        schedule.every(15).minutes.do(us_job)
-        schedule.every(15).minutes.do(mon_job)
-        schedule.every(60).minutes.do(deep_review_job)
+        news_job_handle = schedule.every(10).minutes.do(news_job)
+        kr_job_handle = schedule.every(15).minutes.do(kr_job)
+        us_job_handle = schedule.every(15).minutes.do(us_job)
+        mon_job_handle = schedule.every(15).minutes.do(mon_job)
+        deep_review_job_handle = schedule.every(15).minutes.do(deep_review_job)
+
+        # 15분 주기 내에서 작업 시작 시점을 분산합니다.
+        # 기준 시각(0분, 15분, ...)에는 KR/US 결정 잡을 실행하고,
+        # +5분에는 모니터링 잡, +10분에는 딥 리뷰 잡이 실행되도록 next_run을 조정합니다.
+        base_time = kr_job_handle.next_run
+        us_job_handle.next_run = base_time
+        mon_job_handle.next_run = base_time + timedelta(minutes=5)
+        deep_review_job_handle.next_run = base_time + timedelta(minutes=10)
 
         # schedule.every().day.at("22:35").do(deep_review_job)  # 미장 시작
         # schedule.every().day.at("02:00").do(deep_review_job)  # 미장 도중

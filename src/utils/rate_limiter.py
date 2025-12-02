@@ -2,6 +2,7 @@ import time
 from functools import wraps
 
 from . import logger
+from .. import config
 
 log = logger.get_logger(__name__)
 
@@ -36,4 +37,6 @@ class RateLimiter:
 
 
 # 프로그램 전체에서 사용할 KIS API용 전역 RateLimiter 인스턴스를 생성합니다.
-kis_api_rate_limiter = RateLimiter()
+# 실전투자: 초당 20건 제한 → 안전 마진 19 rps, 모의투자: 초당 2건 제한
+_kis_requests_per_second = 2 if config.MOCK_TRADING else 19
+kis_api_rate_limiter = RateLimiter(requests_per_second=_kis_requests_per_second)

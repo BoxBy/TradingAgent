@@ -230,7 +230,7 @@ class TradingOrchestrator:
                 return "No past insights available."
             joined = "\n".join(texts[:10])
             prompt = ChatPromptTemplate.from_template(
-                "Summarize the following trading insights into at most 6 concise bullet lines in plain text without markdown or numbering. Keep under 600 characters.\n\nInsights:\n{insights}\n\nSummary:" )
+                "Summarize the following past trading insights into at most 6 concise plain-text lines (no markdown or numbering). Focus on: (1) which patterns or setups tended to work well, (2) which conditions or behaviors preceded losses or stop-outs, and (3) any recurring mistakes to avoid. Keep the entire summary under 600 characters.\n\nInsights:\n{insights}\n\nSummary:" )
             chain = prompt | self.llm_provider | StrOutputParser()
             try:
                 return chain.invoke({"insights": joined})[:600]
