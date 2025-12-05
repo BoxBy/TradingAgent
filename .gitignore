@@ -147,8 +147,6 @@ asset_baseline.json
 kospi_code.mst
 kospi_code.mst.zip
 settings.json
-prompts.py
-src/prompts.py.local_backup_before_rebase
 buy_threshold.json
 final_buy_threshold.json
 run.sh

@@ -75,12 +75,14 @@ class DataIngestion:
         # 2. Fallback
         log.info(f"Using fallback news source for {stock_code}")
         # KR Stock -> Naver
-        if stock_code.isdigit() or stock_code.endswith(".KS") or stock_code.endswith(".KQ"):
+        # Convert to string if it's an integer to avoid AttributeError
+        stock_code_str = str(stock_code)
+        if stock_code_str.isdigit() or stock_code_str.endswith(".KS") or stock_code_str.endswith(".KQ"):
              # Naver news is already implemented in get_news_from_naver
              # We need to map the stock code to name first, but get_news_from_naver takes name.
              # We can try to use the utility to get name.
              from ..utils import ticker_utils
-             stock_name = ticker_utils.get_stock_name(stock_code)
+             stock_name = ticker_utils.get_stock_name(stock_code_str)
              if stock_name:
                  return self.get_news_from_naver(stock_name)
         
@@ -131,7 +133,8 @@ class DataIngestion:
         Phase 1: 기본 정보 우선, 재무 정보는 선택적 (Rate limit 방지)
         """
         # Determine market
-        is_kr = stock_code.isdigit() or stock_code.endswith(".KS") or stock_code.endswith(".KQ")
+        stock_code_str = str(stock_code)
+        is_kr = stock_code_str.isdigit() or stock_code_str.endswith(".KS") or stock_code_str.endswith(".KQ")
         
         if is_kr:
             # KIS API - 기본 정보 우선, 재무 정보는 선택적

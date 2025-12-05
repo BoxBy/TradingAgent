@@ -166,9 +166,9 @@ class TradeMonitor:
         }
 
         if stop_loss_type == "fixed":
-            trade_info["stop_loss_price"] = purchase_price * (1 - (stop_loss_value / 100))
+            trade_info["stop_loss_price"] = max(0, purchase_price * (1 - (stop_loss_value / 100)))
         elif stop_loss_type == "trailing":
-            trade_info["stop_loss_price"] = purchase_price * (1 - (stop_loss_value / 100))
+            trade_info["stop_loss_price"] = max(0, purchase_price * (1 - (stop_loss_value / 100)))
             trade_info["trailing_peak_price"] = purchase_price
 
         self.active_trades[stock_code] = trade_info
@@ -202,6 +202,11 @@ class TradeMonitor:
 
             current_stock_info = portfolio_stocks[stock_code]
             current_price = current_stock_info["current_price"]
+            
+            # ✨ [Fix] Skip check if current price is invalid (0.0)
+            if current_price is None or current_price <= 0:
+                # log.warning(f"Skipping sell check for {stock_code} due to invalid price: {current_price}")
+                continue
             reason = None
             # Determine market early for proper price formatting in messages
             market = trade_info.get("market_type", current_stock_info.get("market_type", "KR"))

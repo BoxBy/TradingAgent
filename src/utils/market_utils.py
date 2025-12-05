@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import json
+import os
 
 import holidays
 
@@ -88,3 +90,58 @@ def is_kr_market_open() -> bool:
             f"KR Market is closed. Current time (KST): {kst_now.strftime('%H:%M:%S')}"
         )
         return False
+
+MARKET_REPORTS_FILE = os.path.join(config.LOG_DIR, "market_conditions_history.json")
+
+def load_previous_market_reports(limit: int = 3) -> str:
+    """
+    최근 N개의 시장 위험 보고서를 로드하여 문자열로 반환합니다.
+    """
+    if not os.path.exists(MARKET_REPORTS_FILE):
+        return "No previous reports available."
+    
+    try:
+        with open(MARKET_REPORTS_FILE, "r") as f:
+            reports = json.load(f)
+        
+        # 최신순으로 정렬되어 있다고 가정 (append로 추가하므로 뒤쪽이 최신)
+        recent_reports = reports[-limit:]
+        
+        formatted_reports = []
+        for r in recent_reports:
+            timestamp = r.get("timestamp", "Unknown Time")
+            vix = r.get("vix", "N/A")
+            reasoning = r.get("reasoning", "N/A")
+            formatted_reports.append(f"[{timestamp}] VIX: {vix} | Reason: {reasoning}")
+            
+        return "\n".join(formatted_reports)
+    except Exception as e:
+        log.error(f"Failed to load previous market reports: {e}")
+        return "Error loading reports."
+
+def save_market_report(report_data: dict):
+    """
+    새로운 시장 위험 보고서를 히스토리 파일에 저장합니다.
+    """
+    try:
+        reports = []
+        if os.path.exists(MARKET_REPORTS_FILE):
+            with open(MARKET_REPORTS_FILE, "r") as f:
+                try:
+                    reports = json.load(f)
+                except json.JSONDecodeError:
+                    reports = []
+        
+        # 타임스탬프 추가
+        report_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        reports.append(report_data)
+        
+        # 너무 많이 쌓이지 않도록 최근 50개만 유지
+        if len(reports) > 50:
+            reports = reports[-50:]
+            
+        with open(MARKET_REPORTS_FILE, "w") as f:
+            json.dump(reports, f, indent=2)
+            
+    except Exception as e:
+        log.error(f"Failed to save market report: {e}")

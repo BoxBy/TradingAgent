@@ -77,7 +77,7 @@ CONSERVATIVE_RULES = {
 # 공격형 투자 규칙
 AGGRESSIVE_RULES = {
     "max_loss_percent_per_trade": 7.0,  # 손절 라인을 더 짧게 설정
-    "target_profit_percent_per_trade": 5.0,  # 수익 실현 목표를 낮춰 더 잦은 거래 유도
+    "target_profit_percent_per_trade": 1.5,  # 작게, 자주 수익 실현 (티끌모아 태산 전략)
     "max_investment_per_stock": 200000000,  # 종목당 투자 금액 상향
     "portfolio_max_size": 30,  # 더 많은 종목에 동시 투자
     "restricted_sectors": [],  # 투자 제외 섹터 없음

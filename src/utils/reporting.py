@@ -133,18 +133,20 @@ def format_balance_for_slack(
         portfolio_lines.append("\n--- 🇰🇷 *국내 보유 현황* ---")
         for stock in portfolio_kr:
             pnl_percent = stock.get("pnl_percent", 0)
+            pnl_amount = stock.get("pnl_amount", 0)
             indicator = "🔺" if pnl_percent >= 0 else "🔻"
             portfolio_lines.append(
-                f"  {indicator} `{ticker_utils.format_for_slack(stock.get('stock_code'))}` | {stock.get('quantity')}주 | 수익률: `{pnl_percent:+.2f}%`"
+                f"  {indicator} `{ticker_utils.format_for_slack(stock.get('stock_code'))}` | {stock.get('quantity')}주 | 수익: `₩{pnl_amount:,.0f} ({pnl_percent:+.2f}%)`"
             )
 
     if portfolio_us:
         portfolio_lines.append("\n--- 🇺🇸 *해외 보유 현황* ---")
         for stock in portfolio_us:
             pnl_percent = stock.get("pnl_percent", 0)
+            pnl_amount = stock.get("pnl_amount", 0)
             indicator = "🔺" if pnl_percent >= 0 else "🔻"
             portfolio_lines.append(
-                f"  {indicator} `{ticker_utils.format_for_slack(stock.get('stock_code'))}` | {stock.get('quantity')}주 | 수익률: `{pnl_percent:+.2f}%`"
+                f"  {indicator} `{ticker_utils.format_for_slack(stock.get('stock_code'))}` | {stock.get('quantity')}주 | 수익: `₩{pnl_amount:,.0f} ({pnl_percent:+.2f}%)`"
             )
 
     return "\n".join(header + portfolio_lines)

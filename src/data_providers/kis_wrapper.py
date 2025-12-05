@@ -107,6 +107,59 @@ class TradingInterface:
             )
             return 1300.0  # 오류 발생 시 기본 환율 반환
 
+    def get_buyable_cash_raw(self) -> int:
+        """
+        주식매수주문가능조회 (TTTC8434R / VTTC8434R)
+        실제 주문 가능한 현금(ord_psbl_cash)을 조회합니다.
+        """
+        if not self.broker:
+            return 0
+        
+        url_path = "/uapi/domestic-stock/v1/trading/inquire-daily-buyable-amount"
+        tr_id = "VTTC8434R" if self.mock_trading else "TTTC8434R"
+        
+        # 삼성전자(005930) 기준으로 조회 (종목 무관하게 현금 확인용)
+        params = {
+            "CANO": self.broker.account.account_code,
+            "ACNT_PRDT_CD": self.broker.account.product_code,
+            "PDNO": "005930",
+            "ORD_UNPR": "0",
+            "ORD_DVSN": "02", # 02: mkt, 00: limit
+            "CMA_EVLU_AMT_ICLD_YN": "N",
+            "OVRS_ICLD_YN": "N"
+        }
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                req = APIRequestParameter(url_path, tr_id, params)
+                res = self.broker._send_get_request(req)
+                
+                if res and res.body:
+                    if isinstance(res.body, dict):
+                         # Check for rate limit error in body
+                        rt_cd = res.body.get("rt_cd", "")
+                        msg = res.body.get("msg1", "")
+                        if rt_cd != "0" and "초당 거래건수" in msg:
+                            log.warning(f"Rate limit exceeded for buyable cash (attempt {attempt+1})")
+                            time.sleep(1.0)
+                            continue
+
+                    output = res.body.get("output", {})
+                    # ord_psbl_cash: 주문가능현금
+                    cash = self._safe_int(output.get("ord_psbl_cash"))
+                    if cash == 0:
+                         # Fallback to max_buy_amt (최대매수금액) if cash is 0
+                         cash = self._safe_int(output.get("max_buy_amt"))
+                    
+                    log.info(f"Raw Buyable Cash Fetch: {cash}")
+                    return cash
+            except Exception as e:
+                log.warning(f"Failed to fetch raw buyable cash (attempt {attempt+1}): {e}")
+                time.sleep(1.0)
+        
+        return 0
+
     def get_balance(self, market_type: str = "ALL") -> dict:
         """
         계좌 잔고 및 포트폴리오 정보를 통합 조회합니다.
@@ -127,6 +180,7 @@ class TradingInterface:
         prev_day_assets_krw = 0
         kr_total_krw = False
         us_total_krw = False
+        buyable_cash_krw = 0  # ✨ 주문가능금액 초기화
 
         # --- 1. 국내 계좌 통합 조회 ---
         if market_type.upper() in ["ALL", "KR"]:
@@ -145,8 +199,9 @@ class TradingInterface:
                                         "stock_code": stock["pdno"],
                                         "quantity": quantity,
                                         "average_price": self._safe_float(stock.get("pchs_avg_pric")),
-                                        "current_price": self._safe_float(stock.get("prpr")),
-                                        "pnl_percent": self._safe_float(stock.get("evlu_pfls_rt")),
+                                        "current_price": float(stock.get("prpr", 0.0)),
+                                        "pnl_percent": float(stock.get("evlu_pfls_rt", 0.0)),
+                                        "pnl_amount": float(stock.get("evlu_pfls_amt", 0.0)),  # ✨ 평가손익금 추가
                                         "market_type": "KR",
                                     }
                                 )
@@ -160,6 +215,20 @@ class TradingInterface:
                         prev_day_assets_krw = self._safe_int(
                             kr_summary[0].get("bfdy_tot_asst_evlu_amt")
                         )
+                        
+                        # ✨ Debugging: Log other balance fields
+                        nxdy_excc_amt = self._safe_int(kr_summary[0].get("nxdy_excc_amt"))
+                        prvs_rcdl_excc_amt = self._safe_int(kr_summary[0].get("prvs_rcdl_excc_amt"))
+                        cma_evlu_amt = self._safe_int(kr_summary[0].get("cma_evlu_amt"))
+                        log.info(f"Balance Details: Deposit={cash_kr_krw}, NextDay={nxdy_excc_amt}, Provisional={prvs_rcdl_excc_amt}, CMA={cma_evlu_amt}")
+
+                        # If buyable cash API fails, we might use one of these as fallback
+                        self.last_balance_summary = {
+                            "deposit": cash_kr_krw,
+                            "next_day": nxdy_excc_amt,
+                            "provisional": prvs_rcdl_excc_amt,
+                            "cma": cma_evlu_amt
+                        }
 
                     log.info("국내 계좌 통합 조회 성공.")
                     break
@@ -169,6 +238,14 @@ class TradingInterface:
                     )
                     if "초당 거래건수" in str(e) and attempt < max_retries - 1:
                         time.sleep(retry_delay)
+
+            # ✨ [Fix] 예수금(dnca_tot_amt)이 음수일 수 있으므로, 실제 주문가능금액(CSPA1220/TTTC8434R)을 별도로 조회합니다.
+            try:
+                b_cash = self.get_buyable_cash_raw()
+                if b_cash > 0:
+                    buyable_cash_krw = b_cash
+            except Exception as e:
+                log.warning(f"KR 주문가능금액 조회 실패: {e}")
 
         # --- 2. 해외 계좌 통합 조회 (두 API 조합) ---
         if market_type.upper() in ["ALL", "US"]:
@@ -189,11 +266,23 @@ class TradingInterface:
                                             "stock_code": stock.get("ovrs_pdno"),
                                             "quantity": quantity,
                                             "average_price": self._safe_float(stock.get("pchs_avg_pric", 0)),
-                                            "current_price": self._safe_float(stock.get("now_pric2", 0)),
-                                            "pnl_percent": self._safe_float(stock.get("evlu_pfls_rt", 0)),
+                                            "current_price": float(stock.get("ovrs_now_pric", 0.0)),
+                                            "pnl_percent": float(stock.get("evlu_pfls_rt", 0.0)),
+                                            # ✨ [Fix] evlu_pfls_amt is None for US stocks. Use frcr_evlu_pfls_amt * FX
+                                            "pnl_amount": (
+                                                float(stock.get("evlu_pfls_amt", 0.0)) 
+                                                if stock.get("evlu_pfls_amt") 
+                                                else float(stock.get("frcr_evlu_pfls_amt", 0.0)) * self.get_exchange_rate("USD", "KRW")
+                                            ),
                                             "market_type": "US",
                                         }
                                     )
+                                    # ✨ [Fix] If current_price is 0 (API issue), try to fetch it explicitly
+                                    if portfolio_us[-1]["current_price"] <= 0:
+                                        real_price = self.fetch_price(portfolio_us[-1]["stock_code"], "US")
+                                        if real_price and real_price > 0:
+                                            portfolio_us[-1]["current_price"] = real_price
+                                            log.info(f"Updated 0.0 price for {portfolio_us[-1]['stock_code']} to {real_price}")
                                     # 해외 보유 종목 평가를 현금 잔고에 반영하지 않습니다.
                     log.info("해외 보유 종목 목록 조회 성공.")
                     break
@@ -315,7 +404,9 @@ class TradingInterface:
                         cash_us_krw = int(added_cash_krw)
                         cash_balance += cash_us_krw
                         log.info(f"해외 예수금을 현금 잔고에 반영했습니다: ₩{added_cash_krw:,.0f}")
-                    elif int(cash_balance) == 0 and us_total_krw:
+                    
+                    # ✨ [Fix] US Cash Fallback: If explicit cash fields are 0, infer from Total - Portfolio
+                    if cash_us_krw == 0 and us_total_krw > 0:
                         # 응답에 예수금 관련 금액이 모두 0으로 제공되는 환경 대응: 총 해외자산을 현금 근사치로 사용
                         try:
                             fx = self.get_exchange_rate("USD", "KRW") or 1300.0
@@ -360,6 +451,7 @@ class TradingInterface:
             "prev_day_assets": prev_day_assets_krw,
             "us_total_krw": us_total_krw,
             "kr_total_krw": kr_total_krw,
+            "buyable_cash_krw": buyable_cash_krw,  # ✨ 추가
         }
 
     @kis_api_rate_limiter
@@ -403,7 +495,7 @@ class TradingInterface:
         # Additional low-level fallback: call overseas price endpoint directly (US 전용)
         if market_upper == "US":
             try:
-                for excd in ("NASD", "NAS"):
+                for excd in ("NASD", "NAS", "NYS", "AMS"):
                     params = {
                         "AUTH": "",
                         "EXCD": excd,

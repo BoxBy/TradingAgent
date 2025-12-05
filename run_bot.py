@@ -24,7 +24,12 @@ from src.services.threshold_store import ThresholdStore
 from src.services.database_manager import NewsDatabase
 from src.utils import logger, notification, reporting, ticker_utils
 from src.utils.api_key_manager import LLMProvider, runnable_llm_provider
-from src.utils.market_utils import is_kr_market_open, is_us_market_open
+from src.utils.market_utils import (
+    is_kr_market_open,
+    is_us_market_open,
+    load_previous_market_reports,
+    save_market_report,
+)
 
 # 봇의 모든 로깅을 관리하는 로거 인스턴스를 생성합니다.
 log = logger.get_logger(__name__)
@@ -231,7 +236,12 @@ def run_decision_process(
 
         # 시장별 의사결정 시, 해당 시장의 현금만 사용합니다.
         if market_type == "KR":
-            cash_balance = cash_kr if cash_kr else raw_cash_balance
+            # ✨ [Fix] 예수금(cash_kr)이 음수일 경우 주문가능금액(buyable_cash_krw)을 우선 사용
+            buyable_cash = balance_info.get("buyable_cash_krw", 0)
+            if buyable_cash > 0:
+                cash_balance = buyable_cash
+            else:
+                cash_balance = cash_kr if cash_kr else raw_cash_balance
         elif market_type == "US":
             cash_balance = cash_us if cash_us else raw_cash_balance
         else:
@@ -330,6 +340,9 @@ def run_decision_process(
             recent_fill_stats = rag_manager.get_recent_fill_stats(days=3)
             ce_list = rag_manager.retrieve_recent_critical_events(watchlist, days=1)
             critical_events_text = "\n".join(ce_list) if ce_list else ""
+            
+            # ✨ 이전 시장 보고서 로드
+            previous_reports_text = load_previous_market_reports(limit=3)
 
             assessment = market_condition_agent.analyze(
                 current_vix,
@@ -339,6 +352,12 @@ def run_decision_process(
                 exposure_level=exposure_level,
                 recent_fill_stats=recent_fill_stats,
                 critical_events=critical_events_text,
+                rolling_base_equity_30d=base_equity_30d,
+                pnl_30d_pct=pnl_30d_pct,
+                max_drawdown_30d_pct=max_dd_30d_pct,
+                monthly_return_target_percent=20.0,
+                monthly_drawdown_limit_percent=effective_dd_limit_pct,
+                previous_reports=previous_reports_text, # ✨ 추가
             )
 
             buy_threshold = float(assessment.get("buy_conviction_threshold", 6.0))
@@ -348,6 +367,16 @@ def run_decision_process(
             reasoning = assessment.get("reasoning", "")
 
             market_conditions = assessment
+            
+            # ✨ 시장 보고서 저장
+            report_to_save = {
+                "vix": current_vix,
+                "buy_threshold": buy_threshold,
+                "sell_threshold": sell_threshold,
+                "reasoning": reasoning,
+                "market_type": market_type
+            }
+            save_market_report(report_to_save)
             # 오케스트레이터에서 VIX 기반 가중치를 제대로 사용하기 위해 현재 VIX 값을 함께 전달합니다.
             try:
                 market_conditions["vix_index"] = float(current_vix) if current_vix is not None else 15.0
@@ -569,11 +598,26 @@ def market_risk_check_job(kis_api: TradingInterface, llm_provider: LLMProvider):
     try:
         data_ingestor = DataIngestion(kis_api)
         market_condition_agent = MarketConditionAgent(llm_provider)
+        
+        # ✨ 이전 시장 보고서 로드
+        previous_reports_text = load_previous_market_reports(limit=3)
+        
         assessment = market_condition_agent.analyze(
             data_ingestor.get_vix_index(),
             data_ingestor.get_market_index(),
             data_ingestor.get_general_market_news("general"),
+            previous_reports=previous_reports_text, # ✨ 추가
         )
+        
+        # ✨ 시장 보고서 저장
+        report_to_save = {
+            "vix": data_ingestor.get_vix_index(),
+            "buy_threshold": assessment.get('buy_conviction_threshold', 6.0),
+            "sell_threshold": assessment.get('sell_conviction_threshold', -6.0),
+            "reasoning": assessment.get('reasoning', 'N/A'),
+            "market_type": "CHECK"
+        }
+        save_market_report(report_to_save)
         msg = (
             f"📊 *정기 시장 위험 보고*\n"
             f"- 현재 VIX: *{data_ingestor.get_vix_index():.2f}*\n"

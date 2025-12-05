@@ -72,22 +72,46 @@ class TradingOrchestrator:
             recent_review_history = self.rag_manager.retrieve_relevant_analysis(
                 stock_code, "Recent portfolio review decisions for this stock.", n_results=3
             )
+            # ✨ RAG: 과거 매매 복기 데이터 (Past Insights)
+            past_insights = self.rag_manager.retrieve_relevant_insights(
+                stock_code, "Lessons learned from similar patterns.", n_results=3
+            )
+            
+            # ✨ Market Cap & 52-Week High/Low (from fundamentals or basic info)
+            # Note: Assuming 'fundamentals' or 'basic_info' has these fields. 
+            # If not directly available in 'fundamentals', we might need to rely on what's passed in 'data_bundle'.
+            # For now, we try to extract from 'fundamentals' if available, or pass None.
+            fund_data = data_bundle.get("fundamentals", {})
+            market_cap = float(fund_data.get("market_cap", 0)) if fund_data.get("market_cap") else None
+            w52_high = float(fund_data.get("w52_hgpr", 0)) if fund_data.get("w52_hgpr") else None
+            w52_low = float(fund_data.get("w52_lwpr", 0)) if fund_data.get("w52_lwpr") else None
+
             comprehensive_analyses[stock_code] = {
                 "current_price": data_bundle.get("current_price", "None"),
                 "technical_indicator_analysis": self.technical_agent.analyze(data_bundle.get("ohlcv")),
-                "chart_pattern_analysis": self.chart_pattern_agent.analyze_chart_patterns(data_bundle.get("ohlcv")),
-                "sentiment_analysis": self.sentiment_agent.analyze(data_bundle.get("news")),
+                "chart_pattern_analysis": self.chart_pattern_agent.analyze_chart_patterns(
+                    data_bundle.get("ohlcv"), 
+                    market_cap=market_cap, 
+                    w52_high=w52_high, 
+                    w52_low=w52_low
+                ),
+                "sentiment_analysis": self.sentiment_agent.analyze(
+                    data_bundle.get("news"), 
+                    vix_index=market_conditions.get("vix_index")
+                ),
                 "fundamental_analysis": self.fundamental_agent.analyze(data_bundle.get("fundamentals")),
                 "qualitative_analysis": self.qualitative_agent.analyze(data_bundle.get("fundamentals"), data_bundle.get("news")),
                 "recent_review_history": recent_review_history,
+                "past_insights": past_insights, # ✨ Store for later use
             }
 
         watchlist = list(all_stocks_data.keys())
         critical_events = self.rag_manager.retrieve_recent_critical_events(watchlist, days=7)
 
         # 3-1단계: '공격적인 매수 담당자'가 초기 제안을 생성합니다.
+        # 3-1단계: '공격적인 매수 담당자'가 초기 제안을 생성합니다.
         initial_payload = self._make_final_batch_decision(
-            comprehensive_analyses, balance_info, critical_events, max_investable_cash, market_type
+            comprehensive_analyses, balance_info, critical_events, max_investable_cash, market_type, market_conditions
         )
         initial_decisions = initial_payload.get("decisions", [])
         
@@ -136,7 +160,10 @@ class TradingOrchestrator:
                         current_analysis=current_analysis_for_review,
                         historical_analysis=historical_analysis,
                         relevant_news=relevant_news,
-                        review_context="PRE-PURCHASE VETTING"
+                        review_context="PRE-PURCHASE VETTING",
+
+                        recent_fill_stats=self.rag_manager.get_recent_fill_stats(days=3),
+                        past_insights=current_analysis_for_review.get("past_insights", []) # ✨ Pass Past Insights
                     )
                 except:
                     review_result = {}
@@ -214,7 +241,7 @@ class TradingOrchestrator:
         log.info(f'final_decisions : {final_decisions}')
         return final_payload
 
-    def _make_final_batch_decision(self, analyses: Dict, balance: Dict, critical_events: str, max_investable_cash: float, market_type: str, ) -> Dict:
+    def _make_final_batch_decision(self, analyses: Dict, balance: Dict, critical_events: str, max_investable_cash: float, market_type: str, market_conditions: Dict = {}) -> Dict:
         """여러 종목의 분석 결과를 종합하여 최종 투자 계획과 예산 사용률을 반환하는 LLM 에이전트."""
         log.info("Running Final Batch Decision Agent...")
 
@@ -256,6 +283,7 @@ class TradingOrchestrator:
              "User Investment Rules (currently set to '{trading_style}' style): {user_rules}\n"
              "Rolling 30-day Performance: base=₩{rolling_base_equity_30d:,.0f}, pnl={rolling_pnl_30d_pct:+.2f}%, max_dd={rolling_dd_30d_pct:+.2f}%, target={monthly_target_pct:.2f}%, dd_limit={monthly_dd_limit_pct:.2f}%\n"
              "Recent Fill Stats: {recent_fill_stats}\n"
+             "**Top Sectors (Hot Themes):** {top_sectors}\n"
              "**Past Trading Insights (Learn from these!):**\n{past_insights}\n"
              "Comprehensive Analyses for all stocks (including general review history):\n{comprehensive_analyses}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -278,6 +306,7 @@ class TradingOrchestrator:
                 "user_rules": json.dumps(config.USER_RULES),
                 "past_insights": past_insights_text,
                 "recent_fill_stats": recent_fill_stats_text,
+                "top_sectors": market_conditions.get("top_sectors", []), # ✨ Pass Top Sectors
                 "critical_events": critical_events,
                 "comprehensive_analyses": json.dumps(analyses, default=str),
                 "rolling_base_equity_30d": rolling_base_equity_30d or 0.0,
@@ -322,7 +351,7 @@ class TradingOrchestrator:
 
             try:
                 today = datetime.now().date()
-                max_deadline = today + timedelta(days=14)
+                max_deadline = today + timedelta(days=5)
                 for d in result.get("decisions", []):
                     if d.get("decision") == "BUY":
                         if isinstance(d.get("quantity"), (int, float)):

@@ -33,11 +33,25 @@ class TechnicalAnalysisAgent:
             ohlcv_df.ta.sma(length=20, append=True)
             ohlcv_df.ta.sma(length=60, append=True)
             ohlcv_df.ta.rsi(length=14, append=True)
+            
+            # ✨ 추가 지표: OBV, MFI, RVOL
+            try:
+                ohlcv_df.ta.obv(append=True)
+                ohlcv_df.ta.mfi(length=14, append=True)
+                # RVOL: Current Volume / SMA(Volume, 20)
+                vol_sma = ohlcv_df["Volume"].rolling(window=20).mean()
+                ohlcv_df["RVOL"] = ohlcv_df["Volume"] / vol_sma
+            except Exception as e:
+                log.warning(f"Failed to calculate advanced indicators: {e}")
+
             latest_data = ohlcv_df.iloc[-1]
             analysis = {
                 "SMA_20": latest_data.get("SMA_20"),
                 "SMA_60": latest_data.get("SMA_60"),
                 "RSI_14": latest_data.get("RSI_14"),
+                "OBV": latest_data.get("OBV"),
+                "MFI_14": latest_data.get("MFI_14"),
+                "RVOL": latest_data.get("RVOL"),
                 "current_price": latest_data["Close"],
             }
             # 지표를 바탕으로 간단한 시그널 생성
@@ -52,11 +66,23 @@ class TechnicalAnalysisAgent:
                     analysis["current_price"] < analysis["SMA_20"] < analysis["SMA_60"]
                 ):
                     summary.append("Strong bearish trend (Dead Cross).")
+            
+            if "RVOL" in analysis and analysis["RVOL"] is not None:
+                if analysis["RVOL"] > 2.0:
+                    summary.append(f"Volume Spike detected (RVOL: {analysis['RVOL']:.1f}).")
+            
             if "RSI_14" in analysis and analysis["RSI_14"] is not None:
                 if analysis["RSI_14"] > 70:
                     summary.append("Overbought (RSI > 70).")
                 elif analysis["RSI_14"] < 30:
                     summary.append("Oversold (RSI < 30).")
+            
+            if "MFI_14" in analysis and analysis["MFI_14"] is not None:
+                if analysis["MFI_14"] > 80:
+                    summary.append("Money Flow Overbought.")
+                elif analysis["MFI_14"] < 20:
+                    summary.append("Money Flow Oversold.")
+
             analysis["summary"] = (
                 " ".join(summary) if summary else "No clear technical signal."
             )
@@ -72,10 +98,10 @@ class TechnicalAnalysisAgent:
 class SentimentAnalysisAgent(BaseAgent):
     """뉴스 헤드라인을 분석하여 감성 점수와 핵심 주제를 추출합니다."""
 
-    def analyze(self, news_list: list) -> dict:
+    def analyze(self, news_list: list, vix_index: float | None = None) -> dict:
         if not news_list:
             return {"error": "No news data available."}
-        log.info("Running Sentiment Analysis Agent...")
+        log.info(f"Running Sentiment Analysis Agent (VIX: {vix_index})...")
         headlines = [f"Headline: {news['headline']}" for news in news_list[:20]]
         prompt = ChatPromptTemplate.from_template(prompts.SENTIMENT_ANALYSIS_PROMPT)
 
@@ -89,7 +115,10 @@ class SentimentAnalysisAgent(BaseAgent):
             if hasattr(self.llm, "with_structured_output"):
                 structured_llm = self.llm.with_structured_output(SentimentResult)
                 chain = prompt | structured_llm
-                result: SentimentResult = chain.invoke({"news_headlines": "\n".join(headlines)})
+                result: SentimentResult = chain.invoke({
+                    "news_headlines": "\n".join(headlines),
+                    "vix_index": vix_index if vix_index is not None else "N/A"
+                })
                 if not result:
                     log.warning(
                         "Sentiment analysis LLM returned an empty structured response. Falling back to Neutral."
@@ -101,7 +130,10 @@ class SentimentAnalysisAgent(BaseAgent):
                 return result.model_dump()
 
             chain = prompt | self.llm | StrOutputParser()
-            response_str = chain.invoke({"news_headlines": "\n".join(headlines)})
+            response_str = chain.invoke({
+                "news_headlines": "\n".join(headlines),
+                "vix_index": vix_index if vix_index is not None else "N/A"
+            })
             if not response_str or not response_str.strip():
                 log.warning(
                     "Sentiment analysis LLM returned an empty response. Falling back to Neutral."
@@ -248,7 +280,13 @@ class QualitativeAnalysisAgent(BaseAgent):
 class ChartPatternAgent(BaseAgent):
     """과거 주가 데이터(OHLCV)를 보고 차트 패턴을 분석합니다."""
 
-    def analyze_chart_patterns(self, ohlcv_df: pd.DataFrame) -> dict:
+    def analyze_chart_patterns(
+        self, 
+        ohlcv_df: pd.DataFrame, 
+        market_cap: float | None = None, 
+        w52_high: float | None = None, 
+        w52_low: float | None = None
+    ) -> dict:
         if ohlcv_df is None or len(ohlcv_df) < 30:
             return {"summary": "Not enough chart data to analyze."}
         log.info("Running Chart Pattern Analysis Agent...")
@@ -256,7 +294,12 @@ class ChartPatternAgent(BaseAgent):
         prompt = ChatPromptTemplate.from_template(prompts.CHART_PATTERN_PROMPT)
         chain = prompt | self.llm | StrOutputParser()
         try:
-            summary = chain.invoke({"chart_data": recent_data})
+            summary = chain.invoke({
+                "chart_data": recent_data,
+                "market_cap": f"{market_cap:,.0f}" if market_cap else "N/A",
+                "w52_high": f"{w52_high:,.2f}" if w52_high else "N/A",
+                "w52_low": f"{w52_low:,.2f}" if w52_low else "N/A"
+            })
             log.info(f"Chart Pattern Analysis: {summary}")
             return {"summary": summary}
         except Exception as e:

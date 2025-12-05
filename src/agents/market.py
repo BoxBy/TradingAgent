@@ -43,6 +43,10 @@ class NewsScreenerAgent(BaseAgent):
                 model = result.model_dump()
                 us_tickers = model.get("us_tickers", [])
                 kr_tickers = model.get("kr_tickers", [])
+                # ✨ Catalyst Date 추출 (아직은 로깅만)
+                catalysts = model.get("catalysts", [])
+                if catalysts:
+                    log.info(f"Detected Catalysts: {catalysts}")
             else:
                 chain = prompt | self.llm | StrOutputParser()
                 response_str = chain.invoke({"news_headlines": "\n".join(headlines)})
@@ -59,6 +63,10 @@ class NewsScreenerAgent(BaseAgent):
                 result = json.loads(response_str)
                 us_tickers = result.get("us_tickers", [])
                 kr_tickers = result.get("kr_tickers", [])
+                # ✨ Catalyst Date 추출 (아직은 로깅만)
+                catalysts = result.get("catalysts", [])
+                if catalysts:
+                    log.info(f"Detected Catalysts: {catalysts}")
 
             # 정규표현식을 사용하여 유효한 형식의 티커/종목코드만 필터링합니다.
             valid_us = sorted(
@@ -110,6 +118,7 @@ class MarketConditionAgent(BaseAgent):
         max_drawdown_30d_pct: float | None = None,
         monthly_return_target_percent: float | None = None,
         monthly_drawdown_limit_percent: float | None = None,
+        previous_reports: str | None = None,
     ) -> dict:
         log.info("Running Market Condition Agent to determine integrated thresholds...")
         headlines = [f"- {news['headline']}" for news in (general_news or [])[:20]]
@@ -122,6 +131,7 @@ class MarketConditionAgent(BaseAgent):
             confidence: float
             ttl_minutes: int
             reasoning: str
+            top_sectors: list[str] = []  # ✨ 주도 섹터 추가
 
         try:
             payload = {
@@ -149,6 +159,7 @@ class MarketConditionAgent(BaseAgent):
                 "monthly_drawdown_limit_percent": float(monthly_drawdown_limit_percent)
                 if monthly_drawdown_limit_percent is not None
                 else 10.0,
+                "previous_reports": previous_reports or "None",
             }
 
             if hasattr(self.llm, "with_structured_output"):
@@ -166,6 +177,7 @@ class MarketConditionAgent(BaseAgent):
                         "confidence": 0.7,
                         "ttl_minutes": 90,
                         "reasoning": "empty_response",
+                        "top_sectors": [],
                     }
                 result = result_obj.model_dump()
             else:
@@ -183,11 +195,16 @@ class MarketConditionAgent(BaseAgent):
                         "confidence": 0.7,
                         "ttl_minutes": 90,
                         "reasoning": "empty_response",
+                        "top_sectors": [],
                     }
 
                 if "```json" in response_str:
                     response_str = response_str.split("```json")[1].split("```")[0].strip()
                 result = json.loads(response_str)
+            
+            # ✨ Log Top Sectors
+            if result.get("top_sectors"):
+                log.info(f"Identified Top Sectors: {result['top_sectors']}")
 
             # 숫자 필드 클램프 및 보수적 기본값 적용
             def _to_float(val, default):
@@ -202,13 +219,45 @@ class MarketConditionAgent(BaseAgent):
                 except Exception:
                     return default
 
-            buy_th = _to_float(result.get("buy_conviction_threshold", 6.0), 6.0)
-            buy_th = max(-10.0, min(10.0, buy_th))
-            result["buy_conviction_threshold"] = buy_th
+            # PnL Bias Logic
+            try:
+                stats = json.loads(recent_fill_stats) if isinstance(recent_fill_stats, str) else (recent_fill_stats or {})
+                avg_pnl = float(stats.get("avg_pnl_percent", 0.0))
+                win_rate = float(stats.get("win_rate", 0.5))
+                
+                # Base thresholds
+                buy_th = _to_float(result.get("buy_conviction_threshold", 6.0), 6.0)
+                sell_th = _to_float(result.get("sell_conviction_threshold", -6.0), -6.0)
 
-            sell_th = _to_float(result.get("sell_conviction_threshold", -6.0), -6.0)
-            sell_th = max(-10.0, min(10.0, sell_th))
-            result["sell_conviction_threshold"] = sell_th
+                # Apply Bias
+                if avg_pnl > 0:
+                    buy_th -= 0.3  # Aggressive: Lower threshold to buy more
+                elif avg_pnl < 0:
+                    buy_th += 0.3  # Conservative: Raise threshold to be picky
+                
+                if win_rate >= 0.6:
+                    buy_th -= 0.2
+                elif win_rate <= 0.4:
+                    buy_th += 0.2
+                
+                # Clamp
+                buy_th = max(-10.0, min(10.0, buy_th))
+                sell_th = max(-10.0, min(10.0, sell_th))
+                
+                result["buy_conviction_threshold"] = buy_th
+                result["sell_conviction_threshold"] = sell_th
+                log.info(f"Applied PnL Bias: AvgPnL={avg_pnl}%, WinRate={win_rate} -> New Buy Threshold={buy_th}")
+
+            except Exception as e:
+                log.warning(f"Failed to apply PnL bias: {e}")
+                # Fallback to LLM values if bias fails
+                buy_th = _to_float(result.get("buy_conviction_threshold", 6.0), 6.0)
+                buy_th = max(-10.0, min(10.0, buy_th))
+                result["buy_conviction_threshold"] = buy_th
+
+                sell_th = _to_float(result.get("sell_conviction_threshold", -6.0), -6.0)
+                sell_th = max(-10.0, min(10.0, sell_th))
+                result["sell_conviction_threshold"] = sell_th
 
             conf = _to_float(result.get("confidence", 0.7), 0.7)
             conf = max(0.0, min(1.0, conf))
@@ -253,14 +302,21 @@ class PortfolioReviewAgent(BaseAgent):
         stock_code: str,
         initial_reasoning: str,
         current_analysis: dict,
-        historical_analysis: list,  # ✨ 추가: 과거 분석 데이터
-        relevant_news: list,  # ✨ 추가: 과거 관련 뉴스
+        historical_analysis: list,
+        relevant_news: list,
         review_context: str,
         recent_fill_stats: dict,
+        past_insights: list = [],  # ✨ 추가: 과거 매매 복기 데이터
     ) -> dict:
-        log.info(f"Running deep portfolio review for {stock_code}...")
+        log.info(f"Running deep portfolio review for {stock_code} (Context: {review_context})...")
 
-        prompt = ChatPromptTemplate.from_template(prompts.PORTFOLIO_REVIEW_PROMPT)
+        # Select Prompt based on Context
+        if review_context == "PRE-PURCHASE VETTING":
+            prompt_template = prompts.PRE_PURCHASE_VETTING_PROMPT
+        else:
+            prompt_template = prompts.PORTFOLIO_REVIEW_PROMPT
+            
+        prompt = ChatPromptTemplate.from_template(prompt_template)
 
         class PortfolioReviewResult(BaseModel):
             stock_code: str
@@ -278,6 +334,7 @@ class PortfolioReviewAgent(BaseAgent):
                 "relevant_news": json.dumps(relevant_news, default=str),
                 "review_context": review_context,
                 "recent_fill_stats": json.dumps(recent_fill_stats, default=str),
+                "past_insights": json.dumps(past_insights, default=str),  # ✨ 추가
             }
 
             if hasattr(self.llm, "with_structured_output"):
@@ -331,14 +388,14 @@ class EmergencyNewsAgent(BaseAgent):
     개별 종목의 최신 뉴스를 분석하여, 즉시 청산해야 할 만큼 심각한 위기 상황인지를 판단합니다.
     """
 
-    def analyze_news_for_emergency(self, stock_code: str, news_list: list) -> dict:
+    def analyze_news_for_emergency(self, stock_code: str, news_list: list, price_change_percent: float | None = None) -> dict:
         """
         주어진 뉴스 목록을 분석하여 긴급 매도 필요 여부를 판단하고, 해당할 경우 그 이유를 반환합니다.
         """
         if not news_list:
             return {"is_emergency": False, "reason": "No news to analyze."}
 
-        log.info(f"Running Emergency News Agent for {stock_code}...")
+        log.info(f"Running Emergency News Agent for {stock_code} (Price Change: {price_change_percent}%)...")
         headlines = [
             f"- Headline: {news['headline']}\n  Summary: {news['summary']}"
             for news in news_list[:10]
@@ -351,7 +408,11 @@ class EmergencyNewsAgent(BaseAgent):
             reason: str
 
         try:
-            payload = {"stock_code": stock_code, "news_headlines": "\n".join(headlines)}
+            payload = {
+                "stock_code": stock_code, 
+                "news_headlines": "\n".join(headlines),
+                "price_change_percent": f"{price_change_percent:+.2f}%" if price_change_percent is not None else "N/A"
+            }
 
             if hasattr(self.llm, "with_structured_output"):
                 structured_llm = self.llm.with_structured_output(EmergencyNewsResult)
