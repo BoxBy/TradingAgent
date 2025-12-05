@@ -70,7 +70,7 @@ cd TradingAgent
 ```bash
 pip install -r requirements.txt
 ```
-    pykis 오류가 발생한다면 [pykis](https://github.com/BoxBy/pykis)를 설치해보시는것을 추천드립니다
+pykis 오류가 발생한다면 [pykis](https://github.com/BoxBy/pykis)를 설치해보시는것을 추천드립니다
 
 ## 환경 설정 (api.env)
 
