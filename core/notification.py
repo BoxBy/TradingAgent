@@ -28,7 +28,19 @@ def send_notification(message: str, channel: str = "#stock_report"):
         if "discord.com" in webhook_url:
             payload = {"content": message}
         else:
-            payload = {"channel": channel, "text": message}
+            # Slack: Use blocks format for proper markdown and line breaks
+            payload = {
+                "channel": channel,
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": str(message)
+                        }
+                    }
+                ]
+            }
 
         response = requests.post(webhook_url, json=payload, timeout=5)
         response.raise_for_status()
