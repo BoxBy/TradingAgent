@@ -14,9 +14,15 @@ if config.DEEPL_API_KEY:
 def is_mostly_english(text: str) -> bool:
     if not text:
         return False
-    english_chars = len(re.findall(r'[a-zA-Z0-9\s\.,!@#$%^&*()_+-=<>?:"\'/`~\[\]{}|\\-]', text))
+    # Check if text has significant English content (words, sentences)
+    # Korean text typically has more Korean characters than English words
     korean_chars = len(re.findall(r"[ㄱ-ㅣ가-힣]", text))
-    return english_chars > korean_chars
+    english_words = len(re.findall(r'[a-zA-Z]{3,}', text))  # 3+ letter English words
+    total_chars = len(text)
+    # If Korean chars > 5% of total, it's Korean (avoid false positive for emoji/numbers)
+    if total_chars > 0 and korean_chars / total_chars > 0.05:
+        return False
+    return english_words > 3  # Has multiple English words
 
 def translate_to_korean_if_needed(message: str) -> str:
     if not translator or not is_mostly_english(message):
