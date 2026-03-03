@@ -1,0 +1,95 @@
+# TradingAgent files (ignore in TradingClaw branch)
+.last_check
+BoxBot.md
+BoxClaw.md
+DAILY_REPORT_*
+api.env
+asset_baseline.json
+benchmark_*.py
+benchmark_*.log
+benchmark_*.json
+buy_threshold.json
+debug_sqlite.py
+docs_503_retry.py
+error_stats.json
+final_buy_threshold.json
+fix_stop_loss.py
+kospi_code.mst*
+memory/
+ollama_*.py
+ollama_*.json
+python_app.log
+rag_database_gemini_backup/
+restart_bot.sh.bak
+run.sh.bak
+run_bot.py.backup_*
+search_ollama_models.py
+simulate_improvements.py
+src/
+test_*.py
+ttft_*.log
+update_deadlines.py
+update_targets.py
+verify_ollama_models.py
+watchdog_main.log
+
+# TradingClaw specific - Test files
+test_kis_extended.py
+test_kis_official.py
+tests/
+
+# TradingClaw specific - Markdown files
+MEMORY.md
+SOUL.md
+
+# TradingClaw specific - Data files
+*.xlsx
+*.xls
+data/*.json
+news_ticker_cache.json
+
+# Python
+*/__pycache__/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs
+logs/
+*.log
+watchdog_claw.log
+
+# Database & Cache
+rag_database/
+*.db
+*.sqlite
+*.sqlite3
+data/*.csv
+market_news.db
+
+# Environment
+.env
+api.env
+.venv/
+venv/
+
+# KIS Token
+mcp_bridge/.kis_token.json
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Test
+.pytest_cache/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
