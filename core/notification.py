@@ -28,14 +28,14 @@ def send_notification(message: str, channel: str = "#stock_report"):
         if "discord.com" in webhook_url:
             payload = {"content": message}
         else:
-            # Slack: Use blocks format for proper markdown and line breaks
+            # Slack: Use plain_text type for proper line breaks
             payload = {
                 "channel": channel,
                 "blocks": [
                     {
                         "type": "section",
                         "text": {
-                            "type": "mrkdwn",
+                            "type": "plain_text",
                             "text": str(message)
                         }
                     }
