@@ -92,7 +92,21 @@ async def main():
     send_notification("🚀 *TradingClaw 시스템이 시작되었습니다.*")
 
     async def run_cycle(target_objective=None):
+        # Determine which market is open and set appropriate objective
         if not target_objective:
+            from core.market_hours import is_kr_market_open, is_us_market_open
+            kr_open = is_kr_market_open()
+            us_open = is_us_market_open()
+
+            if kr_open and not us_open:
+                target_objective = "한국 장이 열려 있습니다. 한국 기술주(반도체, 삼성전자, SK하이닉스 등)를 중심으로 시장 스캔하고 포트폴리오를 검토하세요. 1.5% 이상 수익이 있는 종목을 확인하고 신규 매수 기회를 발굴하세요."
+            elif us_open and not kr_open:
+                target_objective = "미국 장이 열려 있습니다. 미국 기술주(NVDA, AAPL, MSFT, AMZN, GOOGL 등)를 중심으로 시장 스캔하고 포트폴리오를 검토하세요. 1.5% 이상 수익이 있는 종목을 확인하고 신규 매수 기회를 발굴하세요."
+            elif kr_open and us_open:
+                target_objective = "한국 장과 미국 장이 모두 열려 있습니다. 양쪽 시장의 기술주를 모두 분석하고 포트폴리오를 검토하세요."
+            else:
+                target_objective = "모든 장이 마감되었습니다. 포트폴리오 현황을 검토하고 다음 개장일을 위한 준비를 하세요."
+        else:
             target_objective = "Perform standard market scan. Review portfolio for 1.5% profit locks. Identify new high-turnover opportunities in US/KR tech sectors."
         
         # 1. Report Balance at Start of Cycle
