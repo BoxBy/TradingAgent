@@ -8,8 +8,8 @@ class AdvancedRAG:
     High-Performance RAG layer using Embeddings and Taxonomy Filtering.
     """
     def __init__(self):
-        # Loading the local snowflake model as used in TradingAgent
-        self.embedding_model = SentenceTransformer("dragonkue/snowflake-arctic-embed-l-v2.0-ko")
+        # Use high-performance multilingual embedding model
+        self.embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
         self.documents = []  # In-memory store: {"id": str, "text": str, "embedding": list, "metadata": dict}
         
     async def get_embedding(self, text: str) -> List[float]:

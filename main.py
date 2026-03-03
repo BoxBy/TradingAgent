@@ -99,13 +99,13 @@ async def main():
             us_open = is_us_market_open()
 
             if kr_open and not us_open:
-                target_objective = "한국 장이 열려 있습니다. 한국 기술주(반도체, 삼성전자, SK하이닉스 등)를 중심으로 시장 스캔하고 포트폴리오를 검토하세요. 1.5% 이상 수익이 있는 종목을 확인하고 신규 매수 기회를 발굴하세요."
+                target_objective = "Korean market is open. Scan Korean tech stocks (semiconductors, Samsung, SK Hynix) and review portfolio. Lock profits at 1.5%+ gains and identify new buying opportunities."
             elif us_open and not kr_open:
-                target_objective = "미국 장이 열려 있습니다. 미국 기술주(NVDA, AAPL, MSFT, AMZN, GOOGL 등)를 중심으로 시장 스캔하고 포트폴리오를 검토하세요. 1.5% 이상 수익이 있는 종목을 확인하고 신규 매수 기회를 발굴하세요."
+                target_objective = "US market is open. Scan US tech stocks (NVDA, AAPL, MSFT, AMZN, GOOGL) and review portfolio. Lock profits at 1.5%+ gains and identify new buying opportunities."
             elif kr_open and us_open:
-                target_objective = "한국 장과 미국 장이 모두 열려 있습니다. 양쪽 시장의 기술주를 모두 분석하고 포트폴리오를 검토하세요."
+                target_objective = "Both Korean and US markets are open. Analyze tech stocks from both markets and review portfolio."
             else:
-                target_objective = "모든 장이 마감되었습니다. 포트폴리오 현황을 검토하고 다음 개장일을 위한 준비를 하세요."
+                target_objective = "All markets are closed. Review portfolio status and prepare for the next trading day."
         else:
             target_objective = "Perform standard market scan. Review portfolio for 1.5% profit locks. Identify new high-turnover opportunities in US/KR tech sectors."
         
