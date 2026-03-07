@@ -4,6 +4,8 @@ from datetime import datetime
 from core.agent import TradingAgentCore
 from data.crawler import MarketCrawler
 from core.tools import dispatch_core_tool
+from config import LLM_ENDPOINT, LLM_API_KEY, LLM_MODEL
+from openai import AsyncOpenAI
 
 class EmergencyAgent:
     """
@@ -14,6 +16,12 @@ class EmergencyAgent:
     def __init__(self, crawler: MarketCrawler):
         self.crawler = crawler
         self.llm_agent = TradingAgentCore(system_prompt="You are a rapid emergency risk manager. Respond strictly in JSON.")
+        # Use centralized LLM config
+        self.llm_client = AsyncOpenAI(
+            api_key=LLM_API_KEY,
+            base_url=LLM_ENDPOINT
+        )
+        self.llm_model = LLM_MODEL
 
     async def check_vix_emergency(self, current_vix: float, threshold: float = 35.0):
         from core.fear_greed import get_fear_greed_with_momentum
@@ -30,50 +38,47 @@ class EmergencyAgent:
             await self._liquidate_portfolio(reason=f"CNN Fear & Greed Index hit {fg_data['index']} (Extreme Fear)")
 
     async def check_portfolio_news_emergency(self):
-        """Monitors current portfolio for critical negative news."""
-        pf_str = dispatch_core_tool("get_portfolio", {})
-        if "API Error" in pf_str or "empty" in pf_str.lower():
-            return
-            
+        """Monitors current portfolio for critical negative news. Improved with consolidated news and self.llm_agent."""
         try:
-            # Assumes pf_str is parsable or we can extract tickers. 
-            # In a real implementation we'd call the inner API. For now, doing string-based mock extract.
-            # Using LLM to parse and decide
-            prompt = f"""
-            Here is the current portfolio raw string:
-            {pf_str}
-
-            Please extract all stock tickers currently held, and return them as a JSON list.
-            Format: {{"tickers": ["AAPL", "005930"]}}
-            """
+            # 1. Fetch current portfolio
+            pf_str = await dispatch_core_tool("get_portfolio", {})
+            if "API Error" in pf_str or "empty" in pf_str.lower():
+                return
             
-            res = await self.llm_agent.client.chat.completions.create(
-                model=self.llm_agent.model,
-                messages=[{"role": "user", "content": prompt}],
+            # 2. Extract tickers using self.llm_agent for retry/token-limit support
+            extract_prompt = f"Extract all stock tickers from this portfolio string as a JSON list: {pf_str}. Format: {{\"tickers\": [\"TICKER1\", \"TICKER2\"]}}"
+            res = await self.llm_agent._call_llm_with_retry(
+                messages=[{"role": "user", "content": extract_prompt}],
                 response_format={"type": "json_object"}
             )
+            
+            if not res: return
             data = json.loads(res.choices[0].message.content)
             tickers = data.get("tickers", [])
             
             for ticker in tickers:
-                news = self.crawler.fetch_category_news(category="business") # Fallback to general if specific fails
-                # In real scenario we'd use get_company_news(ticker) - simulating here
+                # 3. Use consolidated news for high reliability
+                news = self.crawler.get_consolidated_stock_news(ticker, limit=5)
+                if not news: continue
                 
                 eval_prompt = f"""
-                Analyze recent news for {ticker}:
-                {json.dumps(news[:5])}
+                Analyze recent consolidated news for {ticker}:
+                {json.dumps(news)}
                 
-                Is there an extreme negative catalyst (e.g., bankruptcy, major lawsuit, fraud)?
-                Return JSON: {{"is_emergency": boolean, "reason": "string"}}
+                Is there an extreme negative catalyst (e.g., bankruptcy, major lawsuit, fraud, delisting)?
+                Return JSON only: {{"is_emergency": boolean, "reason": "string"}}
                 """
                 
-                eval_res = await self.llm_agent.client.chat.completions.create(
-                    model=self.llm_agent.model,
+                eval_res = await self.llm_agent._call_llm_with_retry(
                     messages=[{"role": "user", "content": eval_prompt}],
                     response_format={"type": "json_object"}
                 )
+                
+                if not eval_res: continue
                 eval_data = json.loads(eval_res.choices[0].message.content)
+                
                 if eval_data.get("is_emergency"):
+                     print(f"[EMERGENCY] Critical Risk for {ticker}: {eval_data.get('reason')}")
                      await self._liquidate_specific_position(ticker, reason=eval_data.get("reason", "Critical news"))
 
         except Exception as e:
@@ -127,8 +132,8 @@ Return JSON:
 }}
 """
         try:
-            res = await self.llm_agent.client.chat.completions.create(
-                model=self.llm_agent.model,
+            res = await self.llm_client.chat.completions.create(
+                model=self.llm_model,
                 messages=[{"role": "user", "content": identify_prompt}],
                 response_format={"type": "json_object"}
             )
@@ -156,8 +161,8 @@ Consider: Is the stock's fundamentals strong enough to weather this?
 Return JSON:
 {{"decision": "SELL" or "HOLD", "confidence": 0-100, "reasoning": "..."}}
 """
-                    confirm_res = await self.llm_agent.client.chat.completions.create(
-                        model=self.llm_agent.model,
+                    confirm_res = await self.llm_client.chat.completions.create(
+                        model=self.llm_model,
                         messages=[{"role": "user", "content": confirm_prompt}],
                         response_format={"type": "json_object"}
                     )

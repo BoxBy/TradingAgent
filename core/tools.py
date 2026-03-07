@@ -155,10 +155,96 @@ def get_trading_tools():
 
 CORE_TOOLS_SCHEMA.extend(get_trading_tools())
 
+def get_openbb_tools():
+    """Returns schemas for OpenBB data tools."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_us_stock_price",
+                "description": "미국 주식의 역사 가격 데이터를 조회합니다. 삼성전자 한국 주식과 NVDA 미국 주식을 비교할 때 유용합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "주식 티커 심볼 (예: AAPL, NVDA, MSFT, TSLA)"
+                        },
+                        "period": {
+                            "type": "string",
+                            "description": "기간 (예: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y)",
+                            "default": "1mo"
+                        }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_fundamental_data",
+                "description": "주식의 펀더멘털 데이터 (밸런스시트, 손익계산서)를 조회합니다. 삼성전자와 NVDA의 재무 데이터를 비교할 때 유용합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "주식 티커 심볼 (예: AAPL, NVDA, MSFT, TSLA)"
+                        }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_fundamental_ratios",
+                "description": "주식의 주요 펀더멘털 비율 (PER, PBR, ROE 등)을 조회합니다. 삼성전자와 NVDA의 밸류에이션을 비교할 때 유용합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "주식 티커 심볼 (예: AAPL, NVDA, MSFT, TSLA)"
+                        }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_news",
+                "description": "주식 관련 최신 뉴스를 조회합니다. MarketCrawler 통합 엔진을 통해 Naver, yfinance, Finnhub 데이터를 합산하여 제공합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "주식 티커 심볼 (예: 005930, AAPL, NVDA)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "뉴스 개수 (기본값: 10)",
+                            "default": 10
+                        }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        }
+    ]
+
+CORE_TOOLS_SCHEMA.extend(get_openbb_tools())
+
 import sys
 from mcp_bridge.kis_trading import KISOfficialClient
 
 _kis_client = None
+_openbb_server = None
 
 def get_kis_client():
     global _kis_client
@@ -166,7 +252,15 @@ def get_kis_client():
         _kis_client = KISOfficialClient()
     return _kis_client
 
-def dispatch_core_tool(tool_name: str, arguments: dict):
+def get_openbb_server():
+    """Get OpenBB server instance"""
+    global _openbb_server
+    if _openbb_server is None:
+        from mcp.openbb_server import OpenBBMCPServer
+        _openbb_server = OpenBBMCPServer()
+    return _openbb_server
+
+async def dispatch_core_tool(tool_name: str, arguments: dict):
     """Executes the function mapped to the tool_name and returns string result."""
     if tool_name == "execute_bash":
         return execute_bash(**arguments)
@@ -188,6 +282,42 @@ def dispatch_core_tool(tool_name: str, arguments: dict):
             return f"Portfolio: {pf}" if pf else "Portfolio is currently empty."
         except Exception as e:
             return f"API Error: {str(e)}"
+    elif tool_name == "get_us_stock_price":
+        try:
+            result = await get_openbb_server().call_tool(
+                "get_us_stock_price",
+                arguments
+            )
+            return result
+        except Exception as e:
+            return f"OpenBB Error: {str(e)}"
+    elif tool_name == "get_fundamental_data":
+        try:
+            result = await get_openbb_server().call_tool(
+                "get_fundamental_data",
+                arguments
+            )
+            return result
+        except Exception as e:
+            return f"OpenBB Error: {str(e)}"
+    elif tool_name == "get_fundamental_ratios":
+        try:
+            result = await get_openbb_server().call_tool(
+                "get_fundamental_ratios",
+                arguments
+            )
+            return result
+        except Exception as e:
+            return f"OpenBB Error: {str(e)}"
+    elif tool_name == "get_stock_news":
+        try:
+            result = await get_openbb_server().call_tool(
+                "get_stock_news",
+                arguments
+            )
+            return result
+        except Exception as e:
+            return f"OpenBB Error: {str(e)}"
     elif tool_name == "place_order":
         try:
             market_arg = arguments.get("market", "KR")

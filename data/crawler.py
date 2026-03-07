@@ -1,6 +1,6 @@
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import finnhub
 import yfinance as yf
 from config import get_api_key
@@ -43,15 +43,23 @@ class MarketCrawler:
                 link = item.get("link")
                 unique_id = abs(hash(link)) & (2**31 - 1)
                 
-                # Using the exact same strptime parsing logic from TradingAgent
-                pub_date = int(datetime.strptime(item.get("pubDate"), "%a, %d %b %Y %H:%M:%S +0900").timestamp())
+                # Robust date parsing for Naver pubDate (supports multiple common formats)
+                pub_date_str = item.get("pubDate")
+                pub_date = int(time.time()) # Default to now
+                if pub_date_str:
+                    for fmt in ["%a, %d %b %Y %H:%M:%S +0900", "%Y-%m-%d %H:%M:%S", "%Y.%m.%d %H:%M"]:
+                        try:
+                            pub_date = int(datetime.strptime(pub_date_str, fmt).timestamp())
+                            break
+                        except ValueError:
+                            continue
                 
                 formatted_news.append({
                     "id": unique_id,
                     "category": "general",
                     "datetime": pub_date,
-                    "headline": item.get("title").replace("&quot;", '"').replace("<b>", "").replace("</b>", ""),
-                    "summary": item.get("description").replace("&quot;", '"').replace("<b>", "").replace("</b>", ""),
+                    "headline": item.get("title", "").replace("&quot;", '"').replace("<b>", "").replace("</b>", "").replace("&amp;", "&"),
+                    "summary": item.get("description", "").replace("&quot;", '"').replace("<b>", "").replace("</b>", "").replace("&amp;", "&"),
                     "url": link,
                     "source": "Naver News"
                 })
@@ -73,14 +81,13 @@ class MarketCrawler:
         # Fallback to general search if it looks like a Korean code
         stock_str = str(stock_code)
         if stock_str.isdigit() or stock_str.endswith(".KS") or stock_str.endswith(".KQ"):
-            # Simple assumption; ideally we'd map via ticker_utils
             return self.get_news_from_naver(stock_str)
 
         try:
             from core.ticker_utils import format_ticker_for_yfinance
             formatted_ticker = format_ticker_for_yfinance(stock_code)
             stock = yf.Ticker(formatted_ticker)
-            raw_news = stock.news
+            raw_news = stock.news or [] # Fixed: prevent None iteration
             formatted_news = []
             for n in raw_news[:5]:
                 formatted_news.append({
@@ -88,7 +95,7 @@ class MarketCrawler:
                     "category": "company",
                     "datetime": n.get("providerPublishTime"),
                     "headline": n.get("title", ""),
-                    "summary": "N/A", # yfinance often lacks summary in list
+                    "summary": "N/A",
                     "url": n.get("link", ""),
                     "source": n.get("publisher", "yfinance")
                 })
@@ -96,6 +103,78 @@ class MarketCrawler:
         except Exception as e:
             print(f"[Crawler Error] Failed yfinance News for {stock_code}: {e}")
             return []
+
+    def get_consolidated_stock_news(self, stock_code: str, limit: int = 10) -> list:
+        """
+        Consolidates news from Naver (for KR), Finnhub, and yfinance.
+        Provides a single reliable entry point for stock news.
+        """
+        all_news = []
+        stock_str = str(stock_code)
+        is_kr = stock_str.isdigit() or stock_str.endswith(".KS") or stock_str.endswith(".KQ")
+        
+        # 1. Naver News (Prioritize for KR)
+        if is_kr:
+            naver_news = self.get_news_from_naver(stock_str)
+            all_news.extend(naver_news)
+
+        # 2. yfinance News (Good for both US and KR)
+        try:
+            from core.ticker_utils import format_ticker_for_yfinance
+            formatted_ticker = format_ticker_for_yfinance(stock_code)
+            stock = yf.Ticker(formatted_ticker)
+            yf_news = stock.news or []  # Fixed: prevent None iteration
+            for n in yf_news[:5]:
+                all_news.append({
+                    "id": n.get("uuid"),
+                    "datetime": n.get("providerPublishTime"),
+                    "headline": n.get("title", ""),
+                    "summary": "N/A",
+                    "url": n.get("link", ""),
+                    "source": f"yfinance ({n.get('publisher', 'unknown')})"
+                })
+        except Exception:
+            pass
+
+        # 3. Finnhub (Great for US)
+        if self.finnhub_client and not is_kr:
+            try:
+                # Last 3 days
+                end = datetime.now().strftime('%Y-%m-%d')
+                start = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+                fh_news = self.finnhub_client.company_news(stock_code, _from=start, to=end) or [] # Fixed: prevent None iteration
+                for n in fh_news[:5]:
+                    all_news.append({
+                        "id": n.get("id"),
+                        "datetime": n.get("datetime"),
+                        "headline": n.get("headline", ""),
+                        "summary": n.get("summary", ""),
+                        "url": n.get("url", ""),
+                        "source": "Finnhub"
+                    })
+            except Exception:
+                pass
+        
+        # Deduplicate and Sort
+        seen_headlines = set()
+        unique_news = []
+        for n in all_news:
+            headline = n['headline'].strip()
+            if headline not in seen_headlines:
+                seen_headlines.add(headline)
+                unique_news.append(n)
+        
+        # Sort by datetime (newest first), ensuring None values are handled
+        def get_dt(x):
+            try:
+                dt = x.get('datetime')
+                if dt is None: return 0
+                return int(float(dt))
+            except Exception:
+                return 0
+                
+        unique_news.sort(key=get_dt, reverse=True)
+        return unique_news[:limit]
             
     def get_general_market_news(self, category="general") -> list:
         """Fetch general market news."""

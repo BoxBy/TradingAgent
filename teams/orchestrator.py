@@ -31,7 +31,10 @@ class OrchestratorAgent:
 
     async def run(self, user_objective: str):
         """Main execution loop for the Orchestrator."""
-        
+
+        # Persistent Context (Option B): Keep history to allow Serena compression at 150k threshold
+        # self.agent.messages = [self.agent.messages[0]] if self.agent.messages else []
+
         # 1. Initialize MCP tools
         await self.register_mcp_tools()
         for tm in self.teammates:

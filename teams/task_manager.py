@@ -4,8 +4,9 @@ import json
 from typing import Dict, List, Any, Optional
 
 class TaskManager:
-    def __init__(self):
+    def __init__(self, mcp_bridge=None):
         # In-memory dictionary of tasks. Thread/async safe within a single event loop.
+        self.mcp_bridge = mcp_bridge  # MCP 브릿지 저장
         self.tasks: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
 
@@ -53,6 +54,16 @@ class TaskManager:
     async def get_claimable_task(self, agent_name: str) -> Optional[dict]:
         """Finds a pending task that has no uncompleted dependencies."""
         async with self._lock:
+            # 빈 태스크 목록일 경우 로그 및 캐싱 시도
+            if not self.tasks:
+                if self.mcp_bridge:
+                    # 캐싱으로 LLM 호출 시도 - Orchestrator가 멈춰지 않도록
+                    try:
+                        await self.mcp_bridge.call_tool("Tool_call", {})
+                    except:
+                        pass
+                return None  # 태스크 없으면 None 반환
+
             for task_id, task in self.tasks.items():
                 if task["status"] == "pending":
                     # Check if all blocked_by tasks are completed
@@ -62,7 +73,7 @@ class TaskManager:
                         if not dep_task or dep_task["status"] != "completed":
                             can_claim = False
                             break
-                    
+
                     if can_claim:
                         task["status"] = "in progress"
                         task["assignee"] = agent_name

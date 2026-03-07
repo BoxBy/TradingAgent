@@ -2,10 +2,18 @@ import asyncio
 from core.agent import TradingAgentCore
 from teams.task_manager import task_manager_instance, register_task_tools
 
+from config import (get_api_key, TEAMMATE_MODEL, TEAMMATE_ENDPOINT, GEMINI_API_KEYS)
+
 class TeammateAgent:
     def __init__(self, name: str, system_prompt: str, mcp_bridge=None):
         self.name = name
-        self.agent = TradingAgentCore(system_prompt=system_prompt)
+        # Use Gemini 3.1 Flash Lite with Key Rotation Pool for Teammates
+        self.agent = TradingAgentCore(
+            system_prompt=system_prompt,
+            model=TEAMMATE_MODEL,
+            base_url=TEAMMATE_ENDPOINT,
+            api_key_pool=GEMINI_API_KEYS
+        )
         
         # Register Task Update tools so the teammate can report its progress
         register_task_tools(self.agent)
@@ -41,6 +49,10 @@ class TeammateAgent:
             
             # Formulate prompt for this specific task
             prompt = f"Please complete the following task:\nTitle: {task['title']}\nDescription: {task['description']}\n\nWhen you are finished, use the TaskUpdate tool to set the status to 'completed' and provide the result."
+            
+            # Persistent Context (Option B): Carry over context between tasks for Serena intelligence
+            # if self.agent.messages:
+            #     self.agent.messages = [self.agent.messages[0]]
             
             # Run the LLM loop to complete the task
             result_str = await self.agent.run_turn(prompt)

@@ -130,7 +130,15 @@ EXPERT_TOOLS_SCHEMA = [
 ]
 
 async def _fetch_ohlcv(code: str) -> pd.DataFrame:
-    df = yf.download(code, period="3mo", auto_adjust=True, progress=False)
+    # Remove any non-alphanumeric characters like $ prefix
+    import re
+    ticker = re.sub(r'[^a-zA-Z0-9]', '', str(code))
+    
+    # Format ticker for yfinance
+    from core.ticker_utils import format_ticker_for_yfinance
+    formatted_ticker = format_ticker_for_yfinance(ticker)
+        
+    df = yf.download(formatted_ticker, period="3mo", auto_adjust=True, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
     return df
@@ -146,27 +154,27 @@ async def handle_expert_tool(name: str, args: dict) -> str:
                 res["current_price"] = float(df.iloc[-1]["Close"])
             return json.dumps(res)
         elif name == "analyze_news_sentiment":
-            news = crawler.fetch_company_news(code)
+            news = crawler.get_consolidated_stock_news(code, limit=10)
             res = await sentiment_expert.analyze(news, vix_index=15.0)
             return json.dumps(res)
         elif name == "analyze_fundamentals":
-            fund = crawler.fetch_company_fundamentals(code)
+            fund = crawler.get_fundamental_data(code)
             res = await fundamental_expert.analyze(fund)
             return json.dumps(res)
         elif name == "analyze_qualitative_moat":
-            prof = crawler.fetch_company_profile(code)
-            news = crawler.fetch_company_news(code)
+            prof = crawler.get_fundamental_data(code)
+            news = crawler.get_consolidated_stock_news(code, limit=10)
             res = await qualitative_expert.analyze(prof, news)
             return json.dumps(res)
         elif name == "analyze_chart_pattern":
             df = await _fetch_ohlcv(code)
-            prof = crawler.fetch_company_profile(code)
+            prof = crawler.get_fundamental_data(code)
             market_cap = prof.get("marketCapitalization")
             # Using defaults for 52w high/low if not fetched deeply
             res = await chart_expert.analyze(df, market_cap=market_cap, w52_high=0.0, w52_low=0.0)
             return json.dumps(res)
         elif name == "get_dynamic_watchlist":
-            news = crawler.fetch_category_news("business")
+            news = crawler.get_general_market_news("business")
             
             # Use original hybrid NewsScreener parsing
             base_tickers = await news_screener.generate_watchlist_from_news(news)
