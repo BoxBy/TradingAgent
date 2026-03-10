@@ -38,12 +38,15 @@ class SerenaWrapper:
             # 텍스트 추출
             full_text = "\n".join([f"{m['role']}: {m.get('content', '')}" for m in messages])
             
+            # 키워드에 매몰되지 않고, 전체적인 트레이딩 맥락과 전략적 의사결정을 보존하도록 요청
             summary = compressor.compress(
                 text=full_text,
-                preserve_keywords=["수익률", "수량", "매수", "매도", "P/L", "익절", "손절"],
-                max_length=500
+                context_type="trading_strategy", 
+                max_length=600,
+                instruction="Summarize the agent's strategic intent and key trading decisions, preserving critical numerical data (PnL, quantities, cash balance)."
             )
             return summary
+
         except Exception as e:
             logger.error(f"Serena compression error: {e}")
             return self._basic_fallback_summary(messages)

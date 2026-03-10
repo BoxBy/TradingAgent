@@ -81,3 +81,34 @@ class TradeMonitor:
         if stock_code in self.active_trades:
             del self.active_trades[stock_code]
             self._save_state()
+
+    def sync_with_broker_portfolio(self, broker_portfolio: list):
+        """
+        Reconcile local active_trades.json with the actual broker portfolio.
+        broker_portfolio is a list of dicts with 'stock_code', 'quantity', 'average_price', etc.
+        """
+        new_active_trades = {}
+        
+        for item in broker_portfolio:
+            code = item['stock_code']
+            # Preserve existing info if available, otherwise create new entry
+            if code in self.active_trades:
+                trade_info = self.active_trades[code].copy()
+                trade_info['quantity'] = item['quantity']
+                trade_info['purchase_price'] = item['average_price']
+                new_active_trades[code] = trade_info
+            else:
+                new_active_trades[code] = {
+                    "stock_code": code,
+                    "purchase_price": item['average_price'],
+                    "quantity": item['quantity'],
+                    "status": "active",
+                    "market_type": item.get('market_type', 'KR')
+                }
+        
+        # Only overwrite if there are changes to avoid unnecessary writes
+        if new_active_trades != self.active_trades:
+            self.active_trades = new_active_trades
+            self._save_state()
+            return True
+        return False

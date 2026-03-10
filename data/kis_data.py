@@ -14,9 +14,26 @@ class KISDataFetcher:
         self.account_no = get_api_key("KIS_MOCK_ACCOUNT_NO") if MOCK_TRADING else get_api_key("KIS_ACCOUNT_NO")
         
         try:
-            domain = DomainInfo.VIRTUAL if MOCK_TRADING else DomainInfo.REAL
+            # pykis 버전마다 DomainInfo 내 상수명이 다른 문제 (VIRTUAL, PAPER, REAL 등)를 동적으로 해결합니다.
+            domain = None
+            if MOCK_TRADING:
+                for attr in ['VIRTUAL', 'PAPER', 'DEMO', 'VIRTUAL_DOMESTIC']:
+                    if hasattr(DomainInfo, attr):
+                        domain = getattr(DomainInfo, attr)
+                        break
+            else:
+                for attr in ['REAL', 'REAL_DOMESTIC', 'PRODUCT']:
+                    if hasattr(DomainInfo, attr):
+                        domain = getattr(DomainInfo, attr)
+                        break
+            
+            if domain is None:
+                # 상수를 찾지 못한 경우 문자열 생성을 시도합니다.
+                try: domain = DomainInfo(kind="virtual" if MOCK_TRADING else "real")
+                except: domain = DomainInfo.REAL if hasattr(DomainInfo, 'REAL') else None
+
             self.api = Api(keyinfo={"appkey": self.app_key, "appsecret": self.app_secret}, domaininfo=domain)
-            print("[KISDataFetcher] Successfully initialized pykis (Read-Only).")
+            print(f"[KISDataFetcher] Successfully initialized pykis (Read-Only) with domain: {domain}")
         except Exception as e:
             print(f"[KISDataFetcher] Failed to initialize pykis: {e}")
             self.api = None

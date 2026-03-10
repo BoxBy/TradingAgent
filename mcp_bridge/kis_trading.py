@@ -95,7 +95,7 @@ class KISOfficialClient:
         
         for attempt in range(3):
             print(f"[KIS] 토큰 요청 중... (Attempt {attempt+1})", file=sys.stderr)
-            res = requests.post(url, headers=headers, json=body)
+            res = requests.post(url, headers=headers, json=body, timeout=10)
             
             if res.status_code == 200:
                 data = res.json()
@@ -137,7 +137,7 @@ class KISOfficialClient:
         headers = self._get_headers("FHKST01010100")
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
         
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code == 200:
             out = res.json().get("output", {})
             return float(out.get("stck_prpr", 0))
@@ -149,7 +149,7 @@ class KISOfficialClient:
         url = f"{self.domain}/uapi/domestic-stock/v1/finance/financial-ratio"
         headers = self._get_headers("FHKST66430200")
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_DIV_CLS_CODE": "0"}
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         return res.json().get("output", []) if res.status_code == 200 else []
 
     @kis_rate_limit
@@ -158,7 +158,7 @@ class KISOfficialClient:
         url = f"{self.domain}/uapi/domestic-stock/v1/finance/balance-sheet"
         headers = self._get_headers("FHKST66430100")
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_DIV_CLS_CODE": "0"}
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         return res.json().get("output", []) if res.status_code == 200 else []
 
     @kis_rate_limit
@@ -167,7 +167,7 @@ class KISOfficialClient:
         url = f"{self.domain}/uapi/domestic-stock/v1/finance/income-statement"
         headers = self._get_headers("FHKST66430300")
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_DIV_CLS_CODE": "0"}
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         return res.json().get("output", []) if res.status_code == 200 else []
 
     # === Trading & Balance (Equivalent to the MCP Bridge) ===
@@ -205,7 +205,8 @@ class KISOfficialClient:
                 # output2[0]['dnca_tot_amt'] contains the deposit cash
                 output2 = data.get("output2", [])
                 if output2 and isinstance(output2, list) and len(output2) > 0:
-                    return float(output2[0].get("dnca_tot_amt", 0))
+                    # 'prvs_rcdl_excc_amt' or 'nxdy_excc_amt' is better for "buyable" cash than 'dnca_tot_amt'
+                    return float(output2[0].get("prvs_rcdl_excc_amt", output2[0].get("dnca_tot_amt", 0)))
             else:
                 print(f"[KIS] get_buyable_cash HTTP {res.status_code}: {res.text}", file=sys.stderr)
         except Exception as e:
@@ -401,10 +402,13 @@ class KISOfficialClient:
                 tr_id = "TTTC0802U" if is_buy else "TTTC0801U"
                 
             headers = self._get_headers(tr_id)
+            # ORD_DVSN: 01 (Limit), 02 (Market). 
+            # In VTS (Mock), 01 often fails with "unsupported type". Use 02 for Mock.
+            ord_dvsn = "02" if self.mock else ("01" if price > 0 else "02")
             body = {
                 "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-                "PDNO": code, "ORD_DVSN": "01" if price > 0 else "02", # 01 is Limit, 02 is Market
-                "ORD_QTY": str(qty), "ORD_UNPR": str(int(price))
+                "PDNO": code, "ORD_DVSN": ord_dvsn,
+                "ORD_QTY": str(qty), "ORD_UNPR": str(int(price)) if ord_dvsn == "01" else "0"
             }
         else: # US Market
             url = f"{self.domain}/uapi/overseas-stock/v1/trading/order"
@@ -425,7 +429,7 @@ class KISOfficialClient:
                 "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00" # 00 is Limit
             }
         
-        res = requests.post(url, headers=headers, json=body)
+        res = requests.post(url, headers=headers, json=body, timeout=10)
         if res.status_code == 200 and res.json().get("rt_cd") == "0":
             return True
         print(f"[KIS] ❌ 주문 오류: {res.text}", file=sys.stderr)

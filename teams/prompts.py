@@ -19,8 +19,9 @@ Identify stock tickers (US or KR) that are mentioned in the news and have **stro
 {news_headlines}
 
 **Instructions:**
-1. Extract tickers (e.g., AAPL, 005930).
-2. **Catalyst Check**: Look for specific dates (Earnings, FDA, Product Launch).
+1. Extract at least **5-10 unique tickers** total (US + KR).
+2. **Prioritization**: Ignore generic mentions. Focus on tickers with high-impact earnings news, price targets, or product launches.
+3. **Catalyst Check**: Look for specific dates (Earnings, FDA, Product Launch).
    - If found, extract as `catalyst_date` (YYYY-MM-DD).
 
 Respond in JSON with:
@@ -150,13 +151,13 @@ Your goal is to maximize capital efficiency. Dead money is the enemy.
    - **Korean Stocks**: ~0.2% round-trip (buy fee + sell fee + tax)
    - **US Stocks**: ~0.5% round-trip (buy fee + sell fee)
    - Our 1.5% target is GROSS. Net profit after costs is ~1.3% (KR) or ~1.0% (US).
-4. **Strict Profit Taking (티끌모아 태산 - Every Little Bit Helps):**
+ 4. **Strict Profit Taking (Every small gain counts):**
    - **If Profit > 1.5%**: Lean heavily towards **SELLING** (Score < -5) to lock in gains quickly.
    - Don't be greedy. 1.5% gross = ~1.0-1.3% net. Small but frequent wins compound fast!
-5. **Time Limit (CRITICAL FOR 1.5% STRATEGY):**
+ 5. **Time Limit (CRITICAL FOR 1.5% STRATEGY):**
    - **If Held > 3 Days**: If the stock hasn't moved or is just chopping, **SELL** (Score < -5). We need to free up cash.
    - Target is 1-2 day holds. 3+ days = capital inefficiency. Penalize stagnation heavily.
-6. **Stop Loss:**
+ 6. **Stop Loss:**
    - If the thesis is broken, sell immediately.
 
 Provide a `conviction_score` from -10 (Strong Sell) to 10 (Strong Hold/Buy More) and a brief 'summary'.
@@ -266,14 +267,15 @@ You have a list of potential stocks to buy. Your job is to select the best ones 
 
 **Goal:**
 - Target a holding period of **1-3 days** (ideally 1-2 days).
-- We want **VERY high turnover** and **quick, small gains** ("티끌모아 태산").
+- We want **VERY high turnover** and **quick, small gains** (Every small gain counts).
 - If a stock won't move *immediately* (within 1-2 days), do not buy it.
 
 **Transaction Costs (CRITICAL):**
 - **Korean Stocks**: 0.014% buy fee + 0.014% sell fee + 0.18% tax = ~0.208% round-trip
 - **US Stocks**: 0.25% buy fee + 0.25% sell fee = ~0.5% round-trip
 - Our 1.5% profit target is GROSS. Net profit = 1.3% (KR) or 1.0% (US).
-- Philosophy: "티끌모아 태산" (Every little bit helps). Small wins add up fast with compounding.
+- Philosophy: "Every small gain counts". Small wins add up fast with compounding.
+
 - Factor this into your risk/reward calculations. Stocks must move >2% to make the trade worthwhile.
 
 **Inputs:**

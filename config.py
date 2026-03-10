@@ -97,16 +97,18 @@ if not GEMINI_API_KEYS:
 LLM_PROVIDER = "nvidia"  # Orchestrator primary provider
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://integrate.api.nvidia.com/v1")
 LLM_API_KEY = os.getenv("NVIDIA_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "nvidia/z-ai/glm5")
+LLM_MODEL = os.getenv("LLM_MODEL", "z-ai/glm5")
 
 # Teammate (Gemini) Configuration
-TEAMMATE_MODEL = "google/gemini-3.1-flash-lite-preview"
+TEAMMATE_MODEL = "gemini-3.1-flash-lite-preview"
 TEAMMATE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-# Fallback LLM Configuration (when primary fails)
-LLM_FALLBACK_ENDPOINT = LLM_ENDPOINT
-LLM_FALLBACK_API_KEY = LLM_API_KEY
-LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "z-ai/glm5")
+# Fallback LLM Configuration (when primary GLM-5 fails)
+LLM_FALLBACK_ENDPOINT = TEAMMATE_ENDPOINT
+LLM_FALLBACK_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+LLM_FALLBACK_MODEL = TEAMMATE_MODEL
+LLM_FALLBACK_KEYS = GEMINI_API_KEYS  # 폴백 시에도 키 로테이션 지원
+
 
 # LLM Retry Configuration
 LLM_MAX_RETRIES = 5  # 최대 재시도 횟수

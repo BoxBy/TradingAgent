@@ -370,7 +370,9 @@ async def dispatch_core_tool(tool_name: str, arguments: dict):
                 
                 return f"Successfully placed {action} order for {arguments['qty']} shares of {arguments['code']}." 
             else:
-                return f"Failed to place {action} order."
+                msg = f"Failed to place {action} order for {arguments['code']}. Check logs for KIS API error."
+                print(f"[FAILED] {msg}")
+                return msg
         except Exception as e:
             return f"API Error: {str(e)}"
     else:

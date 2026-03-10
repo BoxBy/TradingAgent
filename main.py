@@ -6,8 +6,6 @@ import json
 import pandas as pd
 from mcp_bridge.client import MCPBridge
 from teams.orchestrator import OrchestratorAgent
-from data.rag import register_rag_tools
-from data.vibe_check import register_vibe_tools
 from core.notification import send_notification
 from core import reporting
 from core.tools import get_kis_client, dispatch_core_tool
@@ -19,7 +17,7 @@ async def main():
     parser.add_argument("--interval", type=int, default=15, help="Minutes between cycles in daemon mode (default: 15)")
     args = parser.parse_args()
 
-    print(f"[TradingClaw] 시스템 초기화 중... (사이클 간격: {args.interval}분)")
+    print(f"[TradingClaw] Initializing system... (Cycle interval: {args.interval} minutes)")
     
     soul_prompt = ""
     try:
@@ -27,7 +25,7 @@ async def main():
             soul_prompt = f.read()
     except:
         soul_prompt = "You are a quantitative trading agent."
-        print("[TradingClaw] 경고: SOUL.md 파일을 찾을 수 없습니다.")
+        print("[TradingClaw] Warning: SOUL.md file not found.")
 
     try:
         with open("MEMORY.md", "r", encoding="utf-8") as f:
@@ -37,7 +35,7 @@ async def main():
 
     system_prompt = f"{soul_prompt}\n\n[Auto-Memory Context]\n{memory_context}"
 
-    print("[TradingClaw] KIS MCP 브릿지 연결 중 (Python Native Mode)...")
+    print("[TradingClaw] Connecting to KIS MCP Bridge (Python Native Mode)...")
     mcp_env = os.environ.copy()
     
     server_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_bridge", "server_kis.py")
@@ -49,9 +47,9 @@ async def main():
     
     try:
         await bridge.connect()
-        print("[TradingClaw] ✅ KIS MCP 서버 연결 완료")
+        print("[TradingClaw] ✅ KIS MCP Server Connection Successful")
     except Exception as e:
-        print(f"[TradingClaw] ⚠️ KIS MCP 브릿지 연결 실패: {e}")
+        print(f"[TradingClaw] ⚠️ KIS MCP Bridge Connection Failed: {e}")
         bridge = None
 
     orchestrator = OrchestratorAgent(system_prompt=system_prompt, mcp_bridge=bridge)
@@ -70,19 +68,25 @@ async def main():
             
     emergency_task = asyncio.create_task(emergency_loop())
     
-    from teams.expert_tools import register_expert_tools
-    register_rag_tools(orchestrator.agent)
-    register_vibe_tools(orchestrator.agent)
-    register_expert_tools(orchestrator.agent)
+    from teams.expert_tools import register_tools_by_group
+    # 1. Orchestrator: Management + Financials + Memory
+    await register_tools_by_group(orchestrator.agent, "orchestrator", mcp_bridge=bridge)
     
     orchestrator.spawn_teammates(3, system_prompt=system_prompt)
-    for tm in orchestrator.teammates:
-        register_rag_tools(tm.agent)
-        register_vibe_tools(tm.agent)
-        register_expert_tools(tm.agent)
+    # 2. Teammate-1: News & Discovery Specialist
+    await register_tools_by_group(orchestrator.teammates[0].agent, "news_analyst")
+    orchestrator.teammates[0].name = "NewsExplorer"
+
+    # 3. Teammate-2: Technical & Chart Specialist
+    await register_tools_by_group(orchestrator.teammates[1].agent, "tech_analyst")
+    orchestrator.teammates[1].name = "TechChartist"
+
+    # 4. Teammate-3: Risk & Execution Specialist
+    await register_tools_by_group(orchestrator.teammates[2].agent, "risk_trader", mcp_bridge=bridge)
+    orchestrator.teammates[2].name = "RiskExecuter"
         
-    print("\n[TradingClaw] ✅ 시스템 준비 완료 --- 자율 매매 시작 ---\n")
-    send_notification("🚀 *TradingClaw 시스템이 시작되었습니다.*")
+    print("\n[TradingClaw] ✅ System Ready --- Autonomous Trading Started ---\n")
+    send_notification("🚀 *TradingClaw system has started.*")
 
     async def run_cycle(target_objective=None):
         if not target_objective:
@@ -91,15 +95,15 @@ async def main():
             us_open = is_us_market_open()
 
             if kr_open and not us_open:
-                target_objective = "Korean market is open. Scan Korean tech stocks (semiconductors, Samsung, SK Hynix) and review portfolio. Lock profits at 1.5%+ gains and identify new buying opportunities."
+                target_objective = "Korean market is open. Scan for high-turnover opportunities in the Korean tech/semiconductor sectors. Review portfolio for 1.5% profit-taking and identify 3-5 NEW high-conviction buying opportunities."
             elif us_open and not kr_open:
-                target_objective = "US market is open. Scan US tech stocks (NVDA, AAPL, MSFT, AMZN, GOOGL) and review portfolio. Lock profits at 1.5%+ gains and identify new buying opportunities."
+                target_objective = "US market is open. Scan for high-momentum US tech/AI/growth stocks. Review portfolio for 1.5% profit-taking and identify 3-5 NEW high-conviction buying opportunities."
             elif kr_open and us_open:
-                target_objective = "Both Korean and US markets are open. Analyze tech stocks from both markets and review portfolio."
+                target_objective = "Both Korean and US markets are open. Perform a comprehensive scan of high-momentum tech stocks in both markets. Review portfolio for 1.5% gross profit exits."
             else:
-                target_objective = "All markets are closed. Review portfolio status and prepare for the next trading day."
+                target_objective = "All markets are closed. Review portfolio status and build a watchlist for the next trading session focusing on new market leaders with strong catalysts."
         else:
-            target_objective = "Perform standard market scan. Review portfolio for 1.5% profit locks. Identify new high-turnover opportunities in US/KR tech sectors."
+            target_objective = "Perform standard market scan. Prioritize DISCOVERY of 3-5 new high-turnover ticker opportunities. Review portfolio for 1.5% gross profit execution."
         
         # 1. Report Balance (Native KIS Path)
         try:
@@ -123,10 +127,10 @@ async def main():
                     except Exception as e:
                         delay = min(2 * (2 ** attempt), 15)
                         if attempt < max_retries - 1:
-                            print(f"[TradingClaw] {tool_name} 실패 (시도 {attempt+1}/{max_retries}): {e}", file=sys.stderr)
+                            print(f"[TradingClaw] {tool_name} failed (Attempt {attempt+1}/{max_retries}): {e}", file=sys.stderr)
                             await asyncio.sleep(delay)
                         else:
-                            print(f"[TradingClaw] {tool_name} 최종 실패: {e}", file=sys.stderr)
+                            print(f"[TradingClaw] {tool_name} Final Failure: {e}", file=sys.stderr)
                             return cached_balance.get(f"last_{tool_name}")
 
             # Fetch in parallel
@@ -143,6 +147,15 @@ async def main():
             us_assets_krw = float(us_assets_raw) if us_assets_raw is not None else 0.0
             cash_usd = float(us_cash_raw) if us_cash_raw is not None else 0.0
             exchange_rate = float(rate_raw) if rate_raw is not None else 1350.0
+
+            # 1.1. Portfolio Sync (Sync active_trades.json with KIS API)
+            try:
+                from core.monitor import TradeMonitor
+                monitor = TradeMonitor(state_file="logs/active_trades.json")
+                if monitor.sync_with_broker_portfolio(portfolio):
+                    print(f"[TradingClaw] Portfolio synced with broker. active_trades.json updated.")
+            except Exception as e:
+                print(f"[TradingClaw] Portfolio Sync failed: {e}")
 
             balance_info = {
                 "total_assets": cash_krw + us_assets_krw,
@@ -173,21 +186,21 @@ async def main():
                 except: pass
 
             report_msg = reporting.format_balance_for_slack(balance_info, baseline)
-            send_notification(f"🔄 *새 거래 사이클 시작*\n{report_msg}")
+            send_notification(f"🔄 *New Trading Cycle Started*\n{report_msg}")
         except Exception as e:
-            print(f"[TradingClaw] ⚠️ 잔고 리포트 오류: {e}", file=sys.stderr)
+            print(f"[TradingClaw] ⚠️ Balance report error: {e}", file=sys.stderr)
 
-        print(f"\n{'='*60}\n[사이클 시작] {target_objective}\n{'='*60}\n")
+        print(f"\n{'='*60}\n[Cycle Start] {target_objective}\n{'='*60}\n")
         try:
             report = await orchestrator.run(target_objective)
             clean_report = report.replace("\\n", "\n").replace("\n\n\n", "\n\n")
-            print(f"\n{'='*60}\n[사이클 리포트]\n{'='*60}\n{clean_report}")
-            send_notification(f"🏁 *사이클 완료 리포트*\n{clean_report}")
+            print(f"\n{'='*60}\n[Cycle Report]\n{'='*60}\n{clean_report}")
+            send_notification(f"🏁 *Cycle Completion Report*\n{clean_report}")
         except Exception as e:
-            print(f"[TradingClaw] ❌ 사이클 오류: {e}")
+            print(f"[TradingClaw] ❌ Cycle Error: {e}")
 
     if args.daemon:
-        print(f"[TradingClaw] 데몬 모드 시작 (간격: {args.interval}분)")
+        print(f"[TradingClaw] Daemon mode started (Interval: {args.interval} minutes)")
         while True:
             await run_cycle(args.objective)
             await asyncio.sleep(args.interval * 60)

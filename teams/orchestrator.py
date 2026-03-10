@@ -6,8 +6,14 @@ from teams.teammate import TeammateAgent
 
 class OrchestratorAgent:
     def __init__(self, system_prompt: str, mcp_bridge=None):
-        self.agent = TradingAgentCore(system_prompt=system_prompt)
-        register_task_tools(self.agent)
+        from config import LLM_FALLBACK_MODEL, LLM_FALLBACK_ENDPOINT, LLM_FALLBACK_KEYS
+        fallback_config = {
+            "model": LLM_FALLBACK_MODEL,
+            "base_url": LLM_FALLBACK_ENDPOINT,
+            "api_key_pool": LLM_FALLBACK_KEYS
+        }
+        self.agent = TradingAgentCore(system_prompt=system_prompt, fallback_config=fallback_config)
+
         self.mcp_bridge = mcp_bridge
         self.teammates = []
 
@@ -35,85 +41,90 @@ class OrchestratorAgent:
         # Persistent Context (Option B): Keep history to allow Serena compression at 150k threshold
         # self.agent.messages = [self.agent.messages[0]] if self.agent.messages else []
 
-        # 1. Initialize MCP tools
-        await self.register_mcp_tools()
-        for tm in self.teammates:
-            await tm.register_mcp_tools()
+        # 1. Initialize MCP tools - Handled by scoping in main.py
+        # await self.register_mcp_tools()
+        # for tm in self.teammates:
+        #     await tm.register_mcp_tools()
 
         # Shared completion signal
         done_event = asyncio.Event()
 
         async def bounded_work_loop(tm):
             """Work loop that exits when global done_event is set."""
-            print(f"[{tm.name}] 준비 완료 - 태스크 대기 중...")
+            print(f"[{tm.name}] Ready - Waiting for tasks...")
             while not done_event.is_set():
                 task = await task_manager_instance.get_claimable_task(tm.name)
                 if not task:
                     await asyncio.sleep(2)
                     continue
                 task_id = task["id"]
-                print(f"[{tm.name}] 태스크 클레임: [{task_id[:8]}] {task['title']}")
+                print(f"[{tm.name}] Claimed Task: [{task_id[:8]}] {task['title']}")
                 prompt = (
                     f"Please complete the following task:\nTitle: {task['title']}\n"
                     f"Description: {task['description']}\n\n"
                     "When you are finished, use the TaskUpdate tool to set the status to 'completed' and provide the result."
                 )
                 result_str = await tm.agent.run_turn(prompt)
-                print(f"[{tm.name}] LLM 실행 완료: [{task_id[:8]}]")
+                print(f"[{tm.name}] LLM execution completed: [{task_id[:8]}]")
                 current_status = await task_manager_instance.get_task(task_id)
                 if '"status": "in progress"' in current_status:
                     await task_manager_instance.update_task(task_id, status="completed", result=result_str)
-                print(f"[{tm.name}] ✅ 태스크 [{task_id[:8]}] 완료")
+                print(f"[{tm.name}] ✅ Task [{task_id[:8]}] Completed")
 
         async def orchestrate():
-            print("[Orchestrator] 태스크 분해 중...")
-            prompt = (
-                f"User Objective: {user_objective}\n"
-                "Please break down this objective into independent and dependent tasks using the TaskCreate tool. "
-                "Set appropriate 'blocked_by' dependencies to ensure logical execution flow. "
-                "Use TaskList to verify your created tasks. "
-                "When all tasks are created, provide a summary statement."
-            )
-            orchestration_result = await self.agent.run_turn(prompt)
-            print(f"[Orchestrator] 분해 완료: {orchestration_result}")
-            
-            from core.notification import send_notification
-            send_notification(f"📝 *목표 분해 완료*\n{orchestration_result}")
+            try:
+                print("[Orchestrator] Decomposing objective into tasks...")
+                prompt = (
+                    f"User Objective: {user_objective}\n"
+                    "Please break down this objective into independent and dependent tasks using the TaskCreate tool. "
+                    "Set appropriate 'blocked_by' dependencies to ensure logical execution flow. "
+                    "MANDATE: You are a fully autonomous quantitative system. Ensure your tasks lead to DIRECT EXECUTION of trades via RiskExecuter. "
+                    "Do NOT create tasks that 'propose' or 'wait for approval'. Every trade with high conviction MUST be executed automatically. "
+                    "Use TaskList to verify your created tasks. "
+                    "When all tasks are created, provide a summary statement."
+                )
+                orchestration_result = await self.agent.run_turn(prompt)
+                print(f"[Orchestrator] Decomposition completed: {orchestration_result}")
+                
+                from core.notification import send_notification
+                send_notification(f"📝 *Objective Decomposed*\n{orchestration_result}")
 
-            print("[Orchestrator] 팀원들이 태스크를 완료하기를 기다리는 중...")
-            max_wait = 600
-            elapsed = 0
-            while elapsed < max_wait:
-                await asyncio.sleep(5)
-                elapsed += 5
-                tasks_json = await task_manager_instance.list_tasks()
-                tasks = json.loads(tasks_json)
-                if tasks and all(t["status"] == "completed" for t in tasks):
-                    print("[Orchestrator] ✅ 모든 태스크 완료!")
-                    break
-            else:
-                print("[Orchestrator] ⚠️ 타임아웃 - 기한 내 완료되지 않은 태스크가 있습니다. 리포트로 진행.")
-
-            # Signal teammates to stop
-            done_event.set()
+                print("[Orchestrator] Waiting for teammates to complete tasks...")
+                max_wait = 600
+                elapsed = 0
+                while elapsed < max_wait:
+                    await asyncio.sleep(5)
+                    elapsed += 5
+                    tasks_json = await task_manager_instance.list_tasks()
+                    tasks = json.loads(tasks_json)
+                    if tasks and all(t["status"] == "completed" for t in tasks):
+                        print("[Orchestrator] ✅ All tasks completed!")
+                        break
+                else:
+                    print("[Orchestrator] ⚠️ Timeout - Some tasks were not completed in time. Proceeding to final report.")
+            finally:
+                # Signal teammates to stop even if orchestration fails
+                done_event.set()
 
             # Compile final report
-            print("[Orchestrator] 최종 리포트 작성 중...")
-            final_prompt = "All tasks have been completed. Please summarize the final results for the user."
+            print("[Orchestrator] Generating final report...")
+            final_prompt = (
+                "All tasks have been processed. Please provide a FINAL SESSION REPORT for the user. "
+                "Explicitly describe the ACTIONS TAKEN (buys/sells executed). "
+                "If any trades were executed, highlight them. If a task failed due to timeout or LLM error, "
+                "report it as a system bottleneck but emphasize that the system remains fully autonomous."
+            )
             return await self.agent.run_turn(final_prompt)
 
         # Run orchestrator + all teammate loops concurrently
+        # We don't return_exceptions=True here so that task errors are visible and stop the gather
         results = await asyncio.gather(
             orchestrate(),
-            *[bounded_work_loop(tm) for tm in self.teammates],
-            return_exceptions=True
+            *[bounded_work_loop(tm) for tm in self.teammates]
         )
         
         # First result is from orchestrate()
-        final_report = results[0] if results else "No report generated."
-        if isinstance(final_report, Exception):
-            final_report = f"Orchestrator error: {final_report}"
-        return final_report
+        return results[0] if results else "No report generated."
 
 
     def calculate_vix_weights(self, vix_index: float) -> tuple[float, float]:

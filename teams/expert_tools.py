@@ -1,6 +1,7 @@
 import json
 import pandas as pd
 import yfinance as yf
+import os
 from teams.experts import (
     TechnicalAnalysisAgent, MarketConditionExpert, PortfolioReviewExpert,
     PrePurchaseVettingExpert, HeadTraderExpert, NewsScreenerExpert,
@@ -126,8 +127,52 @@ EXPERT_TOOLS_SCHEMA = [
                 "required": ["stock_code", "initial_reasoning", "current_analysis", "historical_analysis", "relevant_news", "recent_fill_stats", "past_insights"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_portfolio",
+            "description": "Invoke the PortfolioReview LLM to assess an existing holding for profit-taking or exit.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "stock_code": {"type": "string"},
+                    "initial_reasoning": {"type": "string"},
+                    "current_analysis": {"type": "string"},
+                    "historical_analysis": {"type": "string"},
+                    "relevant_news": {"type": "string"},
+                    "recent_fill_stats": {"type": "string"},
+                    "past_insights": {"type": "string"}
+                },
+                "required": ["stock_code", "initial_reasoning", "current_analysis", "historical_analysis", "relevant_news", "recent_fill_stats", "past_insights"]
+            }
+        }
     }
 ]
+
+# --- Tool Grouping for RBAC (Scoping) ---
+TOOL_GROUPS = {
+    "orchestrator": [
+        "TaskCreate", "TaskList", "TaskGet",
+        "get_buyable_cash", "get_portfolio",
+        "read_file", "write_file", "edit_file"
+    ],
+    "news_analyst": [
+        "get_dynamic_watchlist", "CheckComparativeVibe",
+        "SearchMarketNews", "get_stock_news", "analyze_news_sentiment",
+        "TaskUpdate", "TaskList"
+    ],
+    "tech_analyst": [
+        "get_us_stock_price", "analyze_technical", "analyze_chart_pattern",
+        "TaskUpdate", "TaskList", "read_file"
+    ],
+    "risk_trader": [
+        "get_fundamental_data", "get_fundamental_ratios", "analyze_fundamentals", "analyze_qualitative_moat",
+        "pre_purchase_vetting", "review_portfolio", "finalize_batch_decision", "place_order",
+        "get_portfolio", "get_buyable_cash",
+        "TaskUpdate", "TaskList", "read_file"
+    ]
+}
 
 async def _fetch_ohlcv(code: str) -> pd.DataFrame:
     # Remove any non-alphanumeric characters like $ prefix
@@ -174,27 +219,63 @@ async def handle_expert_tool(name: str, args: dict) -> str:
             res = await chart_expert.analyze(df, market_cap=market_cap, w52_high=0.0, w52_low=0.0)
             return json.dumps(res)
         elif name == "get_dynamic_watchlist":
-            news = crawler.get_general_market_news("business")
+            news = crawler.get_general_market_news("general")
             
-            # Use original hybrid NewsScreener parsing
-            base_tickers = await news_screener.generate_watchlist_from_news(news)
+            # 1. LLM-based parsing (NewsScreenerExpert)
+            screener_res = await news_screener.generate_watchlist_from_news(news)
             
-            # Apply ported US ticker extraction for maximum accuracy
+            base_tickers = []
+            if isinstance(screener_res, dict):
+                base_tickers.extend(screener_res.get("us_tickers", []))
+                base_tickers.extend(screener_res.get("kr_tickers", []))
+            elif isinstance(screener_res, list):
+                base_tickers = screener_res
+            
+            # 2. Hybrid supplementation with keyword extraction (Unified extraction)
             try:
-                from core.us_ticker_extractor import extract_us_tickers_batch
-                us_tickers = extract_us_tickers_batch(news)
-                base_tickers.extend(us_tickers)
+                from core.market_ticker_extractor import extract_tickers_batch
+                keyword_tickers = extract_tickers_batch(news)
+                # Merge: LLM findings + Keyword findings (avoiding overwriting LLM IQ)
+                result_tickers = list(set(base_tickers) | set(keyword_tickers))
             except Exception as e:
-                pass
-                
-            return json.dumps(list(set(base_tickers)))
+                print(f"[Warning] Unified ticker extraction failed: {e}")
+                result_tickers = list(set(base_tickers))
+            
+            print(f"[Discovery] Found tickers: {result_tickers}")
+            return json.dumps(result_tickers)
         elif name == "finalize_batch_decision":
+            # Dynamic Feedback from MEMORY.md
+            recent_fill_stats = "None"
+            past_insights = "None"
+            memory_file = os.path.join(os.getcwd(), "MEMORY.md")
+            if os.path.exists(memory_file):
+                try:
+                    with open(memory_file, "r") as f:
+                        content = f.read()
+                        if "Recent Session Learnings" in content:
+                            past_insights = content.split("## 💡 Recent Session Learnings")[-1].split("##")[0].strip()
+                        if "Portfolio Focus & Allocation" in content:
+                            recent_fill_stats = content.split("## 📊 Portfolio Focus & Allocation")[-1].split("##")[0].strip()
+                except Exception as e:
+                    print(f"[Error] Reading MEMORY.md for feedback: {e}")
+
             res = await head_trader.finalize_allocations(
                 critical_events="None",
                 max_investable_cash=args.get("max_investable_cash", "0"),
-                recent_fill_stats="None",
-                past_insights="None",
+                recent_fill_stats=recent_fill_stats,
+                past_insights=past_insights,
                 comprehensive_analyses=args.get("comprehensive_analyses")
+            )
+            return json.dumps(res)
+        elif name == "review_portfolio":
+            res = await portfolio_expert.review_holding(
+                stock_code=code,
+                initial_reasoning=args.get("initial_reasoning", ""),
+                current_analysis=args.get("current_analysis", ""),
+                historical_analysis=args.get("historical_analysis", ""),
+                relevant_news=args.get("relevant_news", ""),
+                recent_fill_stats=args.get("recent_fill_stats", ""),
+                past_insights=args.get("past_insights", "")
             )
             return json.dumps(res)
         elif name == "pre_purchase_vetting":
@@ -216,7 +297,68 @@ async def handle_expert_tool(name: str, args: dict) -> str:
 def register_expert_tools(agent: TradingAgentCore):
     for tool in EXPERT_TOOLS_SCHEMA:
         tool_name = tool["function"]["name"]
-        # Use default arg to capture tool_name in closure
         async def handler(n, a, _name=tool_name):
             return await handle_expert_tool(_name, a)
         agent.add_tool(tool, handler)
+
+async def register_tools_by_group(agent: TradingAgentCore, group_name: str, mcp_bridge=None):
+    """
+    Surgically registers only the tools assigned to a specific role group.
+    """
+    if group_name not in TOOL_GROUPS:
+        print(f"[Warning] Unknown tool group: {group_name}")
+        return
+
+    allowed_names = TOOL_GROUPS[group_name]
+    print(f"[RBAC] Registering group '{group_name}' for agent. Allowed: {len(allowed_names)} tools.")
+
+    # 1. Register from EXPERT_TOOLS_SCHEMA
+    for tool in EXPERT_TOOLS_SCHEMA:
+        t_name = tool["function"]["name"]
+        if t_name in allowed_names:
+            async def handler(n, a, _name=t_name):
+                return await handle_expert_tool(_name, a)
+            agent.add_tool(tool, handler)
+
+    # 2. Register from TASK_TOOLS_SCHEMA (Imported here to avoid circulars)
+    from teams.task_manager import TASK_TOOLS_SCHEMA, register_task_tools
+    for tool in TASK_TOOLS_SCHEMA:
+        if tool["function"]["name"] in allowed_names:
+            from teams.task_manager import tool_task_create, tool_task_list, tool_task_get, tool_task_update
+            h_map = {
+                "TaskCreate": tool_task_create,
+                "TaskList": tool_task_list,
+                "TaskGet": tool_task_get,
+                "TaskUpdate": tool_task_update
+            }
+            agent.add_tool(tool, h_map[tool["function"]["name"]])
+
+    # 3. Register from CORE_TOOLS_SCHEMA (Standard FS/KIS tools)
+    from core.tools import CORE_TOOLS_SCHEMA, dispatch_core_tool
+    for tool in CORE_TOOLS_SCHEMA:
+        if tool["function"]["name"] in allowed_names:
+            agent.add_tool(tool, None) 
+
+    # 4. Register RAG/Vibe tools if in group
+    from data.rag import RAG_TOOLS_SCHEMA, tool_search_market_news
+    if "SearchMarketNews" in allowed_names:
+        agent.add_tool(RAG_TOOLS_SCHEMA[0], tool_search_market_news)
+    
+    from data.vibe_check import VIBE_TOOLS_SCHEMA, tool_check_comparative_vibe
+    if "CheckComparativeVibe" in allowed_names:
+        agent.add_tool(VIBE_TOOLS_SCHEMA[0], tool_check_comparative_vibe)
+
+    # 5. MCP Tools (KIS Bridge) - Filtered Scoping
+    if mcp_bridge:
+        mcp_tools = await mcp_bridge.get_openai_tools()
+        for tool in mcp_tools:
+            t_name = tool["function"]["name"]
+            if t_name in allowed_names:
+                async def make_handler(tool_name):
+                    async def handler(name, args):
+                        return await mcp_bridge.call_tool(tool_name, args)
+                    return handler
+                
+                h = await make_handler(t_name)
+                agent.add_tool(tool, h)
+                print(f"[RBAC] Registered MCP tool: {t_name}")

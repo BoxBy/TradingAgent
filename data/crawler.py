@@ -177,14 +177,39 @@ class MarketCrawler:
         return unique_news[:limit]
             
     def get_general_market_news(self, category="general") -> list:
-        """Fetch general market news."""
+        """Fetch general market news with robust fallback."""
+        all_news = []
         if self.finnhub_client:
             try:
-                return self.finnhub_client.general_news(category, min_id=0)
+                finnhub_news = self.finnhub_client.general_news(category, min_id=0)
+                if finnhub_news:
+                    all_news.extend(finnhub_news)
             except Exception as e:
                 print(f"[Crawler Warning] Finnhub general news failed: {e}")
-                
-        return self.get_news_from_naver("증시")
+
+        # Always supplement or fallback with Naver for KR market coverage
+        try:
+            keywords = ["주식", "증시", "급등", "공시", "속보"]
+            for kw in keywords:
+                naver_news = self.get_news_from_naver(kw, limit=10)
+                for n in naver_news:
+                    # Ensure consistency: map 'title' to 'headline'
+                    if 'title' in n and 'headline' not in n:
+                        n['headline'] = n['title']
+                    all_news.append(n)
+        except Exception as e:
+            print(f"[Crawler Warning] Naver fallback failed: {e}")
+
+        # Deduplicate
+        seen = set()
+        unique_news = []
+        for n in all_news:
+            h = n.get('headline', '').strip()
+            if h and h not in seen:
+                seen.add(h)
+                unique_news.append(n)
+        
+        return unique_news[:50]
 
     def get_vix_index(self) -> float:
         for attempt in range(3):

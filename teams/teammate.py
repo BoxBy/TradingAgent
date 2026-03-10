@@ -15,8 +15,7 @@ class TeammateAgent:
             api_key_pool=GEMINI_API_KEYS
         )
         
-        # Register Task Update tools so the teammate can report its progress
-        register_task_tools(self.agent)
+        # Tools are now scoped and registered from main.py
         
         # If MCP is provided, register MCP tools
         self.mcp_bridge = mcp_bridge
