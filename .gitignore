@@ -77,6 +77,12 @@ venv/
 # KIS Token
 mcp_bridge/.kis_token.json
 
+# Secrets
+.gh_token
+.gh_token.bak
+*.secret
+*.key
+
 # IDE
 .vscode/
 .idea/

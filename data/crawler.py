@@ -21,7 +21,7 @@ class MarketCrawler:
         if not self.finnhub_client:
             print("[Warning] Finnhub API key missing. Fundamental data will be limited.")
 
-    def get_news_from_naver(self, stock_name: str) -> list:
+    def get_news_from_naver(self, stock_name: str, limit: int = 10) -> list:
         """Fetch news from Naver via API matching old format."""
         if not self.naver_client_id or not self.naver_client_secret:
             return []
@@ -31,7 +31,7 @@ class MarketCrawler:
             "X-Naver-Client-Id": self.naver_client_id,
             "X-Naver-Client-Secret": self.naver_client_secret,
         }
-        params = {"query": stock_name, "display": 10, "sort": "sim"}
+        params = {"query": stock_name, "display": limit, "sort": "sim"}
 
         try:
             response = requests.get(url, headers=headers, params=params, timeout=5)

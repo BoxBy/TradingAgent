@@ -1,0 +1,199 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1777775578722,
+  "projectRoot": "/home/ubuntu/TradingAgent",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "src",
+      "tests"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "TradingClaw": {
+      "path": "TradingClaw",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777775578713,
+      "keyFiles": [
+        "watchdog_claw.log"
+      ]
+    },
+    "__pycache__": {
+      "path": "__pycache__",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1777775578715,
+      "keyFiles": [
+        "config.cpython-311.pyc",
+        "main.cpython-311.pyc"
+      ]
+    },
+    "core": {
+      "path": "core",
+      "purpose": null,
+      "fileCount": 22,
+      "lastAccessed": 1777775578716,
+      "keyFiles": [
+        "agent.py",
+        "asset_classifier.py",
+        "database_manager.py",
+        "etf_news_filter.py",
+        "fear_greed.py"
+      ]
+    },
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 9,
+      "lastAccessed": 1777775578716,
+      "keyFiles": [
+        "crawler.py",
+        "kis_data.py",
+        "kospi_tickers.csv",
+        "market_news.db",
+        "nasdaq_tickers.csv"
+      ]
+    },
+    "logs": {
+      "path": "logs",
+      "purpose": null,
+      "fileCount": 60,
+      "lastAccessed": 1777775578718,
+      "keyFiles": [
+        "active_trades.json",
+        "api_key_usage.json",
+        "asset_history.json",
+        "asset_history_kr.json",
+        "asset_history_us.json"
+      ]
+    },
+    "mcp": {
+      "path": "mcp",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1777775578719,
+      "keyFiles": [
+        "__init__.py",
+        "openbb_server.py"
+      ]
+    },
+    "mcp_bridge": {
+      "path": "mcp_bridge",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1777775578719,
+      "keyFiles": [
+        "client.py",
+        "kis_trading.py",
+        "server_kis.py"
+      ]
+    },
+    "memory": {
+      "path": "memory",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777775578719,
+      "keyFiles": [
+        "2026-03-02.md"
+      ]
+    },
+    "rag_database": {
+      "path": "rag_database",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777775578720,
+      "keyFiles": [
+        "chroma.sqlite3"
+      ]
+    },
+    "rag_database_gemini_backup": {
+      "path": "rag_database_gemini_backup",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1777775578720,
+      "keyFiles": [
+        "chroma.sqlite3"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 7,
+      "lastAccessed": 1777775578720,
+      "keyFiles": [
+        "config.py.backup_20260112_135141",
+        "prompts.py.backup_20251212_141907",
+        "prompts.py.backup_20260112_135141",
+        "prompts.py.local_backup_before_rebase",
+        "prompts_backup.py"
+      ]
+    },
+    "tasks": {
+      "path": "tasks",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1777775578721,
+      "keyFiles": []
+    },
+    "teams": {
+      "path": "teams",
+      "purpose": null,
+      "fileCount": 8,
+      "lastAccessed": 1777775578721,
+      "keyFiles": [
+        "agent_tools.py",
+        "emergency.py",
+        "expert_tools.py",
+        "experts.py",
+        "orchestrator.py"
+      ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 1,
+      "lastAccessed": 1777775578721,
+      "keyFiles": [
+        "test_mas_flow.py"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "main.py",
+      "accessCount": 5,
+      "lastAccessed": 1777777921464,
+      "type": "file"
+    },
+    {
+      "path": "core/market_hours.py",
+      "accessCount": 1,
+      "lastAccessed": 1777777765380,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

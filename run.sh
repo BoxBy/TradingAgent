@@ -1,19 +1,18 @@
 #!/bin/bash
-# Move to TradingClaw directory
-cd /home/ubuntu/TradingClaw
+# Move to TradingAgent directory
+cd /home/ubuntu/TradingAgent
 
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
-# Infinite Loop (Watchdog)
-while true
-do
-    echo "--- [Watchdog] : $(date) : TradingClaw daemon started ---" >> watchdog_claw.log
-    
-    # Run the autonomous daemon mode
-    # Default interval is 15 minutes as configured in main.py
-    python3 -u main.py --daemon >> logs/autonomous.log 2>&1
-    
-    echo "--- [Watchdog] : $(date) : TradingClaw daemon exited. Restarting in 10s. ---" >> watchdog_claw.log
-    sleep 10
-done
+# Run the autonomous daemon mode directly
+# This script should be run from within an existing screen session:
+# screen -S tradingagent
+# ./run.sh
+
+# Default interval is 15 minutes as configured in main.py
+echo "--- [TradingAgent] : $(date) : Starting in foreground (run inside screen for persistence) ---" >> watchdog_claw.log
+python3 -u main.py --daemon >> logs/autonomous.log 2>&1
+
+# If the script exits, log it and exit (don't auto-restart - let the user restart)
+echo "--- [TradingAgent] : $(date) : Exited ---" >> watchdog_claw.log

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from datetime import datetime
 from core.agent import TradingAgentCore
 from data.crawler import MarketCrawler
@@ -53,7 +54,16 @@ class EmergencyAgent:
             )
             
             if not res: return
-            data = json.loads(res.choices[0].message.content)
+            raw_content = res.choices[0].message.content or ""
+            raw_content = raw_content.strip()
+            if not raw_content:
+                print("[EMERGENCY] LLM returned empty content for ticker extraction, skipping")
+                return
+            try:
+                data = json.loads(raw_content)
+            except json.JSONDecodeError:
+                print(f"[EMERGENCY] LLM returned non-JSON for ticker extraction (len={len(raw_content)}), skipping: {raw_content[:80]}")
+                return
             tickers = data.get("tickers", [])
             
             for ticker in tickers:
@@ -75,7 +85,24 @@ class EmergencyAgent:
                 )
                 
                 if not eval_res: continue
-                eval_data = json.loads(eval_res.choices[0].message.content)
+                eval_raw = eval_res.choices[0].message.content or ""
+                eval_raw = eval_raw.strip()
+                if not eval_raw:
+                    continue
+                try:
+                    eval_data = json.loads(eval_raw)
+                except json.JSONDecodeError:
+                    # LLM returned non-JSON despite response_format=json_object
+                    # Try extracting JSON object from the response
+                    import re
+                    _json_match = re.search(r'\{[^{}]*\}', eval_raw)
+                    if _json_match:
+                        try:
+                            eval_data = json.loads(_json_match.group())
+                        except json.JSONDecodeError:
+                            continue
+                    else:
+                        continue
                 
                 if eval_data.get("is_emergency"):
                      print(f"[EMERGENCY] Critical Risk for {ticker}: {eval_data.get('reason')}")
@@ -83,6 +110,17 @@ class EmergencyAgent:
 
         except Exception as e:
             print(f"[EMERGENCY] Error checking portfolio news: {e}")
+            # Don't spam — only escalate once per hour
+            try:
+                from core.error_escalation import escalate_error
+                escalate_error(
+                    'Emergency JSON Parse Error',
+                    f'check_portfolio_news() failed: {e}. '
+                    f'Likely MiniMax M3 returned empty content with response_format=json_object. '
+                    f'Consider increasing max_tokens or adding content.strip() guard.',
+                )
+            except Exception:
+                pass
 
     async def _liquidate_portfolio(self, reason: str):
         print(f"!!! INITIATING FULL PORTFOLIO LIQUIDATION !!! Reason: {reason}")
@@ -92,7 +130,7 @@ class EmergencyAgent:
     async def _liquidate_specific_position(self, ticker: str, reason: str):
         print(f"!!! INITIATING SPECIFIC EMERGENCY LIQUIDATION for {ticker} !!! Reason: {reason}")
         from core.notification import send_notification
-        send_notification(f"🚨 *긴급 매도 결정: {ticker}*\n━━━━━━━━━━━━━━━━━━━━\n💡 *이유*: {reason}")
+        send_notification(f"🚨 *긴급 매도 결정: {ticker}*\n━━━━━━━━━━━━━━━━━━━━\n💡 *이유*: {reason}", source="EmergencyAgent", category="emergency")
 
     # ============================================================
     # EmergencyManagerSystem2 — LLM-based macro event impact analysis
@@ -132,11 +170,13 @@ Return JSON:
 }}
 """
         try:
-            res = await self.llm_client.chat.completions.create(
-                model=self.llm_model,
+            res = await self.llm_agent._call_llm_with_retry(
                 messages=[{"role": "user", "content": identify_prompt}],
                 response_format={"type": "json_object"}
             )
+            if not res:
+                print("[System2] Failed to identify affected stocks after retries.")
+                return
             data = json.loads(res.choices[0].message.content)
             affected = data.get("affected_stocks", [])
 
@@ -161,11 +201,13 @@ Consider: Is the stock's fundamentals strong enough to weather this?
 Return JSON:
 {{"decision": "SELL" or "HOLD", "confidence": 0-100, "reasoning": "..."}}
 """
-                    confirm_res = await self.llm_client.chat.completions.create(
-                        model=self.llm_model,
+                    confirm_res = await self.llm_agent._call_llm_with_retry(
                         messages=[{"role": "user", "content": confirm_prompt}],
                         response_format={"type": "json_object"}
                     )
+                    if not confirm_res:
+                        print(f"[System2] Confirmation LLM call failed for {ticker} after retries. Skipping.")
+                        continue
                     confirm_data = json.loads(confirm_res.choices[0].message.content)
 
                     if confirm_data.get("decision") == "SELL" and confirm_data.get("confidence", 0) >= 70:

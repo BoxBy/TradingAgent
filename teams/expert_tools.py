@@ -102,7 +102,9 @@ EXPERT_TOOLS_SCHEMA = [
                 "type": "object",
                 "properties": {
                     "comprehensive_analyses": {"type": "string", "description": "JSON string of all stock analysis data"},
-                    "max_investable_cash": {"type": "string", "description": "budget string e.g. '1000000 KRW'"}
+                    "max_investable_cash": {"type": "string", "description": "budget string e.g. '1000000 KRW'"},
+                    "recommended_target_profit_pct": {"type": "number", "description": "Optional cycle-level profit target override (e.g. 2.5)"},
+                    "recommended_stop_loss_pct": {"type": "number", "description": "Optional cycle-level stop loss override (negative, e.g. -5.0)"}
                 },
                 "required": ["comprehensive_analyses", "max_investable_cash"]
             }
@@ -196,13 +198,17 @@ async def handle_expert_tool(name: str, args: dict) -> str:
             res = tech_agent.analyze(df)
             # Add current price so HeadTrader can use it to calculate qty
             if not df.empty:
-                res["current_price"] = float(df.iloc[-1]["Close"])
+                res["current_price"] = df.iloc[-1]["Close"].item()
             return json.dumps(res)
         elif name == "analyze_news_sentiment":
             news = crawler.get_consolidated_stock_news(code, limit=10)
             res = await sentiment_expert.analyze(news, vix_index=15.0)
             return json.dumps(res)
         elif name == "analyze_fundamentals":
+            # ETF: skip fundamental analysis (not applicable)
+            from src.utils.asset_classifier import is_etf
+            if is_etf(code):
+                return json.dumps({"health": "N/A (ETF)", "valuation": "N/A (ETF)", "summary": "ETF — fundamental analysis skipped."})
             fund = crawler.get_fundamental_data(code)
             res = await fundamental_expert.analyze(fund)
             return json.dumps(res)
@@ -264,7 +270,9 @@ async def handle_expert_tool(name: str, args: dict) -> str:
                 max_investable_cash=args.get("max_investable_cash", "0"),
                 recent_fill_stats=recent_fill_stats,
                 past_insights=past_insights,
-                comprehensive_analyses=args.get("comprehensive_analyses")
+                comprehensive_analyses=args.get("comprehensive_analyses"),
+                recommended_target_profit_pct=args.get("recommended_target_profit_pct"),
+                recommended_stop_loss_pct=args.get("recommended_stop_loss_pct")
             )
             return json.dumps(res)
         elif name == "review_portfolio":

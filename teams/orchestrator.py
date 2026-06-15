@@ -6,12 +6,8 @@ from teams.teammate import TeammateAgent
 
 class OrchestratorAgent:
     def __init__(self, system_prompt: str, mcp_bridge=None):
-        from config import LLM_FALLBACK_MODEL, LLM_FALLBACK_ENDPOINT, LLM_FALLBACK_KEYS
-        fallback_config = {
-            "model": LLM_FALLBACK_MODEL,
-            "base_url": LLM_FALLBACK_ENDPOINT,
-            "api_key_pool": LLM_FALLBACK_KEYS
-        }
+        from config import get_fallback_config
+        fallback_config = get_fallback_config()
         self.agent = TradingAgentCore(system_prompt=system_prompt, fallback_config=fallback_config)
 
         self.mcp_bridge = mcp_bridge
@@ -33,6 +29,8 @@ class OrchestratorAgent:
         """Spawns Teammate workers to process the shared task queue."""
         for i in range(count):
             tm = TeammateAgent(f"Teammate-{i+1}", system_prompt, self.mcp_bridge)
+            # Share orchestrator's fallback config with teammates
+            tm.agent.fallback_config = self.agent.fallback_config
             self.teammates.append(tm)
 
     async def run(self, user_objective: str):
@@ -78,6 +76,7 @@ class OrchestratorAgent:
                     f"User Objective: {user_objective}\n"
                     "Please break down this objective into independent and dependent tasks using the TaskCreate tool. "
                     "Set appropriate 'blocked_by' dependencies to ensure logical execution flow. "
+                    "STRATEGIC AUTONOMY: Ensure that the 'Market Condition' analysis task outputs cycle-level TP/SL recommendations, and that these recommendations are EXPLICITLY passed into the description of the 'Trade Execution' task so the RiskExecuter can apply them via `finalize_batch_decision`. "
                     "MANDATE: You are a fully autonomous quantitative system. Ensure your tasks lead to DIRECT EXECUTION of trades via RiskExecuter. "
                     "Do NOT create tasks that 'propose' or 'wait for approval'. Every trade with high conviction MUST be executed automatically. "
                     "Use TaskList to verify your created tasks. "
@@ -87,7 +86,7 @@ class OrchestratorAgent:
                 print(f"[Orchestrator] Decomposition completed: {orchestration_result}")
                 
                 from core.notification import send_notification
-                send_notification(f"📝 *Objective Decomposed*\n{orchestration_result}")
+                send_notification(f"📝 *Objective Decomposed*\n{orchestration_result}", source="Orchestrator", category="decomposition")
 
                 print("[Orchestrator] Waiting for teammates to complete tasks...")
                 max_wait = 600
@@ -102,6 +101,18 @@ class OrchestratorAgent:
                         break
                 else:
                     print("[Orchestrator] ⚠️ Timeout - Some tasks were not completed in time. Proceeding to final report.")
+                    incomplete = [t for t in tasks if t.get("status") != "completed"]
+                    if tasks and len(incomplete) == len(tasks):
+                        # Zero tasks completed — escalate
+                        try:
+                            from core.error_escalation import escalate_error
+                            escalate_error(
+                                'Cycle Zero Tasks Completed',
+                                f'All {len(tasks)} tasks stuck (none completed) in 600s. '
+                                f'Likely LLM connection error. Tasks: {[t.get("id","?")[:8] for t in incomplete[:5]]}',
+                            )
+                        except Exception:
+                            pass
             finally:
                 # Signal teammates to stop even if orchestration fails
                 done_event.set()
@@ -182,8 +193,9 @@ class OrchestratorAgent:
             weight = exps[idx] / denom
             investment_per_stock = total_investment_amount * weight
             
-            # Enforce max investment per stock rule
-            max_per_stock = 100000000 # 100M KRW max
+            # Enforce max investment per stock rule from config
+            from config import USER_RULES
+            max_per_stock = USER_RULES.get("max_investment_per_stock", 100000000)
             investment_per_stock = min(investment_per_stock, max_per_stock)
 
             decision["quantity"] = int(investment_per_stock / stock_price) if stock_price > 0 else 0

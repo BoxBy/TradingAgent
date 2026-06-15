@@ -12,10 +12,15 @@ from config import (get_api_key, LLM_ENDPOINT, LLM_API_KEY, LLM_MODEL,
 from core.tools import CORE_TOOLS_SCHEMA, dispatch_core_tool
 from core.market_hours import is_market_open
 
-# LLM API 로깅 설정
+# LLM API 로깅 설정 - 일별 로테이트 (30일 보관)
+from logging.handlers import TimedRotatingFileHandler
+
 llm_logger = logging.getLogger('llm_api')
-llm_file_handler = logging.FileHandler('logs/llm_api.log')
+llm_file_handler = TimedRotatingFileHandler(
+    'logs/llm_api.log', when='midnight', interval=1, backupCount=30, encoding='utf-8'
+)
 llm_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+llm_file_handler.suffix = '%Y-%m-%d'
 llm_logger.addHandler(llm_file_handler)
 llm_logger.setLevel(logging.INFO)
 
@@ -33,6 +38,15 @@ class TradingAgentCore:
             base_url = LLM_ENDPOINT
         if api_key is None:
             api_key = LLM_API_KEY
+        if api_key_pool is None:
+            from config import GEMINI_API_KEYS
+            # Gemini 키풀은 Gemini endpoint에서만 사용 (NVIDIA에 Google 키 전송 방지)
+            if GEMINI_API_KEYS and "generativelanguage.googleapis.com" in (base_url or ""):
+                api_key_pool = GEMINI_API_KEYS
+
+        if fallback_config is None:
+            from config import get_fallback_config
+            fallback_config = get_fallback_config()
 
         self.model = model
         self.base_url = base_url
@@ -71,13 +85,14 @@ class TradingAgentCore:
         # 메시지 압축 관련
         self.last_compress_time = 0
         self.compress_interval = 3600  # 1시간마다 체크 (초 단위)
-        # 250K TPM 대응을 위해 임계값을 대폭 낮춤 (기존 150,000 -> 40,000)
-        # Lite 모델의 안정적 추론과 비용 절감을 위해 40k 근처에서 압축을 유도합니다.
-        self.max_tokens_threshold = 40000 
-        self.max_tool_loop_limit = 10 # 한 턴에서 최대 도구 호출 횟수 제한 (무한 루프 방지)
+        # 모델 컨텍스트 한도(262,144)의 ~57% 수준에서 압축 트리거
+        # 반복 압축 루프가 실제로 토큰을 줄이므로, 충분한 컨텍스트를 유지하면서 안전 마진 확보
+        self.max_tokens_threshold = 150000 
+        self.max_tool_loop_limit = 25 # 한 턴에서 최대 도구 호출 횟수 제한 (무한 루프 방지)
         
         # 메시지 히스토리 초기화
         self.messages = []
+        self.system_prompt = system_prompt
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
@@ -91,6 +106,15 @@ class TradingAgentCore:
                 return
         self.available_schemas.append(schema)
         self.external_tool_registry[tool_name] = handler
+
+    def update_system_prompt(self, new_prompt: str):
+        """Updates the system prompt in both the message history and the stored reference."""
+        self.system_prompt = new_prompt
+        if not self.messages or self.messages[0].get("role") != "system":
+            self.messages.insert(0, {"role": "system", "content": new_prompt})
+        else:
+            self.messages[0]["content"] = new_prompt
+        # llm_logger.info(f"[Agent] System prompt updated: {new_prompt[:100]}...")
 
     async def dispatch_tool(self, tool_name: str, arguments: dict) -> str:
         """Dispatches to either a core tool or an externally registered tool."""
@@ -129,11 +153,11 @@ class TradingAgentCore:
         print(f"[Agent] 🔄 {msg}") # Extra visibility in autonomous.log
 
     def migrate_to_fallback(self):
-        """Immediately migrates this agent instance to use its fallback configuration."""
+        """Migrates to the next model in the fallback chain."""
         if not self.fallback_config:
             return False
 
-        print(f"[Agent] 🛡️ EMERGENCY: Falling back to {self.fallback_config.get('model')}...")
+        print(f"[Agent] 🛡️ Fallback: {self.model} → {self.fallback_config.get('model')}...")
         self.model = self.fallback_config.get("model")
         self.base_url = self.fallback_config.get("base_url")
         self.api_key_pool = self.fallback_config.get("api_key_pool")
@@ -148,8 +172,33 @@ class TradingAgentCore:
             timeout=120.0,
             max_retries=0 if self.api_key_pool else 3
         )
-        # Clear fallback config to prevent nested fallbacks
-        self.fallback_config = None 
+        
+        # Gemini 호환: thought_signature 주입 + tool role name 보장
+        if "gemini" in self.model.lower() or "gemma" in self.model.lower():
+            for msg in self.messages:
+                if "tool_calls" in msg:
+                    for tc in msg["tool_calls"]:
+                        if "thought_signature" not in tc:
+                            tc["thought_signature"] = "fallback_dummy_signature_123"
+                # Ensure tool role messages have a non-empty 'name' for Gemini
+                if msg.get("role") == "tool" and not msg.get("name"):
+                    msg["name"] = msg.get("tool_call_id", "unknown_tool")
+
+        # Remove orphaned tool messages (tool_call_id not matching any assistant tool_call)
+        valid_tool_call_ids = set()
+        for msg in self.messages:
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                for tc in msg["tool_calls"]:
+                    tc_id = tc.get("id")
+                    if tc_id:
+                        valid_tool_call_ids.add(tc_id)
+        self.messages = [
+            msg for msg in self.messages
+            if not (msg.get("role") == "tool" and msg.get("tool_call_id") not in valid_tool_call_ids)
+        ]
+
+        # 체인의 다음 fallback으로 이동 (없으면 None → 마지막 단계)
+        self.fallback_config = self.fallback_config.get("next_fallback")
         return True
 
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -159,6 +208,15 @@ class TradingAgentCore:
         for msg in messages:
             # 1. Strip all None values at the top level
             m = {k: v for k, v in msg.items() if v is not None}
+            
+            # 1.5. 🐛 Fix: Gemini contents[].parts[] 에러 방지 
+            # content가 빈 문자열이거나 whitespace-only면 명시적 빈 문자열로 보정
+            # (Gemini는 parts에 빈 text를 거부함)
+            content = m.get("content")
+            if content is not None and isinstance(content, str) and not content.strip():
+                m["content"] = " "  # 최소 1자 공백
+            elif content is None and m.get("role") in ("system", "user", "assistant"):
+                m["content"] = " "
             
             # 2. Ensure content is present and is a string (if empty)
             if "content" not in m:
@@ -196,12 +254,18 @@ class TradingAgentCore:
             if m.get("role") == "tool":
                 if not m.get("content"):
                     m["content"] = "Tool executed with no return value."
+                # Gemini API requires a non-empty 'name' for function_response.
+                # If missing/empty, derive from tool_call_id or use a default.
+                if not m.get("name"):
+                    m["name"] = m.get("tool_call_id", "unknown_tool")
             
             sanitized.append(m)
         return sanitized
 
-    async def run_turn(self, user_input: str = None) -> str:
-        """Runs the LLM loop asynchronously until it stops returning tool calls."""
+    async def run_turn(self, user_input: str = None, json_mode: bool = False) -> str:
+        """Runs the LLM loop asynchronously until it stops returning tool calls.
+        If json_mode is True, the final output is forced to be a JSON object.
+        """
         # Rotate key before each turn to spread load
         self._rotate_api_key()
         
@@ -214,6 +278,7 @@ class TradingAgentCore:
             self.messages.append({"role": "user", "content": user_input})
 
         loop_count = 0
+        recent_tool_calls = []  # Detect actual infinite loops (same tool+args repeated)
         while True:
             loop_count += 1
             if loop_count > self.max_tool_loop_limit:
@@ -227,12 +292,29 @@ class TradingAgentCore:
             response = await self._call_llm_with_retry(
                 messages=self.messages,
                 tools=self.available_schemas if self.available_schemas else None,
-                tool_choice="auto"
+                tool_choice="auto",
+                json_mode=json_mode
             )
 
 
             if response is None:
-                return "LLM API Error: Failed after retries"
+                # Retry once with simplified history: system prompt + last 3 user messages only
+                print("[Agent] 🔄 API returned None — retrying with simplified message history...")
+                simplified = [m for m in self.messages if m.get("role") == "system"]
+                user_msgs = [m for m in self.messages if m.get("role") == "user"]
+                simplified.extend(user_msgs[-3:])
+                if not simplified or simplified[0].get("role") != "system":
+                    simplified.insert(0, {"role": "system", "content": self.system_prompt})
+
+                response = await self._call_llm_with_retry(
+                    messages=simplified,
+                    tools=self.available_schemas if self.available_schemas else None,
+                    tool_choice="auto",
+                    json_mode=json_mode
+                )
+                if response is None:
+                    return "LLM API Error: Failed after retries"
+                print("[Agent] ✅ Simplified history retry succeeded")
 
             message = response.choices[0].message
             # Sanitize immediately before storing to prevent null struct errors on fallback
@@ -247,15 +329,63 @@ class TradingAgentCore:
 
             # Handle tool calls
             for tool_call in message.tool_calls:
-                original_tool_name = tool_call.function.name
+                original_tool_name = tool_call.function.name or ""
                 # Strip namespace prefix if present (e.g., 'default_api:TaskCreate' -> 'TaskCreate')
                 tool_name = original_tool_name.split(':')[-1] if ':' in original_tool_name else original_tool_name
+                
+                # Guard: if tool_name is empty, use a fallback to prevent Gemini API errors
+                if not tool_name:
+                    tool_name = f"unknown_tool_{tool_call.id[:8] if tool_call.id else 'no_id'}"
+                    print(f"[Agent] ⚠️ 빈 도구 이름 감지, fallback 사용: {tool_name}")
+                
                 arguments_str = tool_call.function.arguments
 
                 try:
                     arguments = json.loads(arguments_str)
                 except json.JSONDecodeError:
                     arguments = {}
+
+                # --- Enhanced Infinite Loop Detection ---
+                # Build a fingerprint: tool_name + sorted args (for same-request detection)
+                try:
+                    args_fingerprint = f"{tool_name}:{json.dumps(arguments, sort_keys=True)}"
+                except:
+                    args_fingerprint = f"{tool_name}:{arguments_str}"
+                recent_tool_calls.append(args_fingerprint)
+
+                # Dangerous tools: block after 2 consecutive identical calls
+                dangerous_tools = {"place_order", "place_sell_order", "buy_stock", "sell_stock"}
+                if tool_name in dangerous_tools and len(recent_tool_calls) >= 2:
+                    last_2 = recent_tool_calls[-2:]
+                    if len(set(last_2)) == 1:
+                        print(f"[Agent] 🚨 위험 도구 무한 루프 감지: '{tool_name}' 2회 연속 동일 호출. 강제 종료.")
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_name,
+                            "content": f"⚠️ BLOCKED: '{tool_name}' was called twice with identical arguments. This looks like a loop. STOP calling this tool and proceed to a different action or return your analysis."
+                        })
+                        continue
+
+                # Same tool 3+ times in a row → inject warning to steer LLM away
+                if len(recent_tool_calls) >= 3:
+                    last_3 = recent_tool_calls[-3:]
+                    if all(tcn.startswith(f"{tool_name}:") for tcn in last_3):
+                        print(f"[Agent] ⚠️ 반복 호출 감지: '{tool_name}' 3회 연속. 경고 메시지 주입.")
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_name,
+                            "content": f"⚠️ You have called '{tool_name}' 3 times in a row. This is likely a loop. STOP repeating this call. Use a DIFFERENT tool or return your final response now."
+                        })
+                        continue
+
+                # Same exact request 4+ times → hard kill
+                if len(recent_tool_calls) >= 4:
+                    last_4 = recent_tool_calls[-4:]
+                    if len(set(last_4)) == 1:
+                        print(f"[Agent] ⚠️ 무한 루프 감지: '{tool_name}' 4회 연속 동일 호출. 강제 종료.")
+                        return f"Error: Infinite tool call loop detected for '{tool_name}' with identical arguments."
 
                 print(f"[Agent] \ud234 \uc2e4\ud589: {tool_name}")
                 tool_result_str = await self.dispatch_tool(tool_name, arguments)
@@ -297,69 +427,110 @@ class TradingAgentCore:
         return elapsed > self.compress_interval
 
     async def _compress_messages(self) -> None:
-        """오래된 메시지를 요약해서 압축 (Serena 지능형 엔진 사용)"""
-        if len(self.messages) <= 5:  # 충분한 기록이 없으면 압축 안 함
+        """오래된 메시지를 요약해서 압축. 반복 압축으로 항상 토큰 한도 이내 보장."""
+        if len(self.messages) <= 5:
             return
 
         try:
-            # system 프롬프트 유지
-            system_msg = self.messages[0]
-            # 최근 10개 메시지를 유지하려 시도하되, tool 호출 체인이 깨지지 않도록 조정
-            recent_count = 10
-            # 최근 10개 메시지를 유지하려 시도하되, 항상 'user' 역할로 시작하도록 조정 (Gemini 스키마 준수)
-            recent_count = 10
-            while recent_count < len(self.messages) - 1:
-                boundary_idx = len(self.messages) - recent_count
-                if boundary_idx <= 1: # 시스템 메시지 바로 다음이면 중단
+            # 보존할 최근 메시지 수 (시작값). 반복마다 줄여가며 토큰을 맞춤.
+            recent_count = min(10, len(self.messages) - 2)
+
+            while True:
+                # Gemini 호환: 보존 구간의 첫 메시지가 'user'로 시작하도록 조정
+                # 단, recent_count의 50%까지만 증가 허용 (압축 무력화 방지)
+                adjusted_recent = recent_count
+                max_adjusted = min(recent_count + max(recent_count // 2, 2), len(self.messages) - 2)
+                while adjusted_recent < max_adjusted:
+                    boundary_idx = len(self.messages) - adjusted_recent
+                    if boundary_idx <= 1:
+                        break
+                    if self.messages[boundary_idx].get("role") == "user":
+                        break
+                    adjusted_recent += 1
+
+                recent_messages = self.messages[-adjusted_recent:]
+                messages_to_compress = self.messages[1:-adjusted_recent] if adjusted_recent < len(self.messages) - 1 else []
+
+                if not messages_to_compress:
+                    # 경계 조정으로 압축 대상이 비어버림 → recent_count 축소 후 재시도
+                    post_tokens = await self._estimate_tokens()
+                    if post_tokens <= self.max_tokens_threshold:
+                        self.messages[0] = {"role": "system", "content": self.system_prompt}
+                        break
+                    new_recent = max(recent_count // 2, 3)
+                    if new_recent >= recent_count:
+                        print(f"[Agent] ⚠️ 경계 조정으로 압축 불가. 강제 최소화.")
+                        self.messages = [
+                            {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": "[이전 대화 컨텍스트가 압축되었습니다. 계속 진행합니다.]"}
+                        ]
+                        break
+                    print(f"[Agent] 🔄 경계 조정 스킵 — 보존 축소 ({recent_count} → {new_recent}) 재시도")
+                    recent_count = new_recent
+                    continue
+
+                print(f"[Agent] 🗜️ 압축 시작 (대상: {len(messages_to_compress)}개 메시지, 보존: {adjusted_recent}개)")
+
+                try:
+                    from core.serena_wrapper import serena_engine
+                    summary = await serena_engine.summarize_trading_context(messages_to_compress)
+                except Exception as e:
+                    print(f"[Agent] Serena 압축 실패, 기본 요약으로 전환: {e}")
+                    summary_prompt = "Summarize the previous conversation concisely. Focus on current positions, important decisions, and strategic intent."
+                    temp_messages = [
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": summary_prompt}
+                    ] + messages_to_compress[-5:]
+                    sum_resp = await self._call_llm_with_retry(messages=temp_messages)
+                    if sum_resp is None:
+                        summary = "요약 실패"
+                    else:
+                        summary = sum_resp.choices[0].message.content if sum_resp.choices else "요약 실패"
+
+                # 핵심 수정: 원본 시스템 프롬프트에서 재구성 (누적 방지)
+                updated_system_content = self.system_prompt + f"\n\n[이전 대화 요약]\n{summary}"
+                self.messages = [
+                    {"role": "system", "content": updated_system_content},
+                    *recent_messages
+                ]
+
+                # 압축 후 토큰 재측정
+                post_tokens = await self._estimate_tokens()
+                print(f"[Agent] 📊 압축 후 토큰: {post_tokens} (한도: {self.max_tokens_threshold})")
+
+                if post_tokens <= self.max_tokens_threshold:
+                    break  # 성공 — 한도 이내
+
+                # 아직 초과: recent_count를 줄여서 재시도
+                new_recent = max(recent_count // 2, 3)
+                if new_recent >= recent_count:
+                    # 더 이상 줄일 수 없음 — 최소 메시지만 유지
+                    print(f"[Agent] ⚠️ 최소 보존으로도 한도 초과. 시스템 프롬프트 요약만 보존.")
+                    self.messages = [
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": f"[이전 대화 요약]\n{summary}"}
+                    ]
                     break
-                
-                # Gemini 호환성을 위해 새로운 세션의 시작은 반드시 'user'여야 안전함
-                if self.messages[boundary_idx].get("role") == "user":
-                    break
-                recent_count += 1
-            
-            recent_messages = self.messages[-recent_count:]
-            # 요약 대상 (system과 recent 제외한 모든 것)
-            messages_to_compress = self.messages[1:-recent_count]
-
-            if not messages_to_compress:
-                return
-
-            print(f"[Agent] 🗜️ Serena 지능형 압축 시작 (대상: {len(messages_to_compress)}개 메시지, 보존: {recent_count}개)")
-
-            try:
-                from core.serena_wrapper import serena_engine
-                summary = await serena_engine.summarize_trading_context(messages_to_compress)
-            except Exception as e:
-                print(f"[Agent] Serena 압축 실패, 기본 요약으로 전환: {e}")
-                # 기본 요약 프롬프트 (최소한의 컨텍스트를 위해 요약 대상 중 마지막 몇 개 포함)
-                summary_prompt = "Summarize the previous conversation concisely. Focus on current positions, important decisions, and strategic intent."
-                temp_messages = [system_msg, {"role": "user", "content": summary_prompt}] + messages_to_compress[-5:]
-                
-                sum_resp = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=temp_messages,
-                    max_tokens=600
-                )
-                summary = sum_resp.choices[0].message.content if sum_resp else "요약 실패"
-
-            # 새로운 메시지 구성
-            # 새로운 메시지 구성: 첫 번째 시스템 메시지에 요약 내용을 통합하여 순서 위반 방지
-            updated_system_content = system_msg.get("content", "") + f"\n\n[이전 대화 지능형 요약 (Serena)]\n{summary}"
-            self.messages = [
-                {"role": "system", "content": updated_system_content},
-                *recent_messages
-            ]
+                print(f"[Agent] 🔄 토큰 초과 — 보존 메시지 축소 ({recent_count} → {new_recent})하여 재압축")
+                recent_count = new_recent
 
             self.last_compress_time = time.time()
-            print(f"[Agent] ✅ 지능형 압축 완료 (현재 메시지 {len(self.messages)}개)")
+            post_tokens = await self._estimate_tokens()
+            print(f"[Agent] ✅ 압축 완료 (메시지 {len(self.messages)}개, 토큰 ~{post_tokens})")
 
         except Exception as e:
-            print(f"[Agent] ❌ 압축 프로세스 치명적 오류: {e}")
-            if len(self.messages) > 20:
-                self.messages = [self.messages[0]] + self.messages[-19:]
+            import traceback as _tb
+            print(f"[Agent] ❌ 압축 치명적 오류: {e}")
+            from core.error_escalation import escalate_error
+            escalate_error(
+                '압축 치명적 오류',
+                f'Message compression failed critically: {e}',
+                _tb.format_exc()
+            )
+            # 비상 복구: 원본 시스템 프롬프트 + 최근 메시지만
+            self.messages = [{"role": "system", "content": self.system_prompt}] + self.messages[-5:]
 
-    async def _call_llm_with_retry(self, model: str = None, **kwargs):
+    async def _call_llm_with_retry(self, model: str = None, json_mode: bool = False, **kwargs):
         """
         Smart retry logic with exponential backoff for API calls.
         Handles rate limiting (429), server errors (5xx), and transient failures.
@@ -380,17 +551,43 @@ class TradingAgentCore:
             print(f"  Total Input: ~{len(messages_str)//4 + len(tools_str)//4} tokens")
 
         max_attempts = max(LLM_MAX_RETRIES, len(self.api_key_pool) + 1) if self.api_key_pool else LLM_MAX_RETRIES
+        consecutive_503 = 0  # 503 연속 카운터 — 임계치 초과 시 즉시 폴백
 
         for attempt in range(max_attempts):
             # API 호출 직전 전역 새니타이징 및 모델 확정
             current_messages = self._sanitize_messages(kwargs.get("messages", []))
             current_model = model if model else self.model
             
+            # Gemini/Gemma 전용: function_response.name 빈값 2차 검증
+            # _sanitize_messages이 처리하지만, Gemini API가 특히 엄격하므로 추가 방어
+            is_google_model = "gemini" in current_model.lower() or "gemma" in current_model.lower()
+            if is_google_model:
+                for i, msg in enumerate(current_messages):
+                    if msg.get("role") == "tool":
+                        if not msg.get("name"):
+                            msg["name"] = msg.get("tool_call_id", "unknown_tool")
+                            print(f"[Agent] 🔧 Gemini 검증: messages[{i}] 빈 name → {msg['name']}")
+                    # assistant 메시지의 tool_calls에서 빈 function.name도 검증
+                    if "tool_calls" in msg:
+                        for tc in msg["tool_calls"]:
+                            fn = tc.get("function", {})
+                            if fn and not fn.get("name"):
+                                fn["name"] = "unknown_function"
+                                print(f"[Agent] 🔧 Gemini 검증: tool_calls 빈 function.name → unknown_function")
+            
+            # In-place 정제: self.messages에도 동일한 정제 적용 (다음 호출 시 누적 방지)
+            if kwargs.get("messages") is self.messages:
+                self.messages = self._sanitize_messages(self.messages)
+            
             call_kwargs = dict(kwargs)
             call_kwargs["messages"] = current_messages
             call_kwargs["model"] = current_model
 
+            if json_mode:
+                call_kwargs["response_format"] = {"type": "json_object"}
+
             try:
+                llm_logger.info(f"API Call #{attempt+1} - Model: {current_model}")
                 response = await self.client.chat.completions.create(**call_kwargs)
                 return response
             except Exception as e:
@@ -400,9 +597,24 @@ class TradingAgentCore:
                 is_server_error = "500" in error_str or "502" in error_str or "503" in error_str or "504" in error_str or ("5" in error_str and "status" in error_str)
                 is_timeout = "timeout" in error_str.lower() or "connection" in error_str.lower() or "deadline" in error_str.lower()
                 is_not_found = "404" in error_str or "not found" in error_str.lower()
+                is_gemini_format_error = "function_response.name" in error_str or "function_call.name" in error_str or "GenerateContentRequest.contents" in error_str
 
 
                 rotated = False
+                # 503 연속 카운터 업데이트
+                if "503" in error_str:
+                    consecutive_503 += 1
+                else:
+                    consecutive_503 = 0
+
+                # 🔥 503 폴백 최적화: 3회 연속 503 시 즉시 폴백 체인으로 전환
+                # (키 로테이션은 429에만 효과 있고, 503은 서버 과부하라 키와 무관)
+                if consecutive_503 >= 3 and self.fallback_config and self.migrate_to_fallback():
+                    print(f"[Agent] 🔀 503 연속 {consecutive_503}회 감지 — 즉시 폴백 모델로 전환합니다")
+                    llm_logger.warning(f"[LLM Fallback] 503 x{consecutive_503} → 폴백 체인 활성화")
+                    if "model" in kwargs: del kwargs["model"]
+                    return await self._call_llm_with_retry(**kwargs)
+
                 # Robustness: If rate limited or unauthorized, rotate key immediately and retry
                 if (is_rate_limit or is_auth_error) and self.api_key_pool:
                     print(f"[Agent] ⚠️ Key issue detected ({error_str[:30]}). Rotating and retrying...")
@@ -426,10 +638,29 @@ class TradingAgentCore:
                 if rotated:
                     delay = max(delay, 1.0) # minimum 1s upon rotation
 
+                # Gemini format error: 강제 in-place 정제 후 1회 재시도
+                if is_gemini_format_error:
+                    print(f"[Agent] 🔧 Gemini 포맷 에러 감지. self.messages 강제 정제 후 재시도...")
+                    self.messages = self._sanitize_messages(self.messages)
+                    for msg in self.messages:
+                        if msg.get("role") == "tool" and not msg.get("name"):
+                            msg["name"] = msg.get("tool_call_id", "unknown_tool")
+
                 # Only retry on retryable errors
-                if attempt < max_attempts - 1 and (is_rate_limit or is_auth_error or is_server_error or is_timeout):
-                    llm_logger.warning(f"[LLM Retry] Attempt {attempt + 1}/{max_attempts} failed: {error_str[:100]}. Waiting {delay:.1f}s...")
-                    print(f"[LLM Retry] Attempt {attempt + 1}/{max_attempts} failed: {error_str[:100]}. Waiting {delay:.1f}s...")
+                # 🐛 Fix: Gemini 400 contents[].parts[] 에러는 sanitize로 해결 안 되면 
+                # 3회까지만 재시도하고 바로 fallback으로 전환 (무한 루프 방지)
+                is_client_400 = "400" in error_str and not is_rate_limit and not is_auth_error
+                
+                if attempt < max_attempts - 1 and (is_rate_limit or is_auth_error or is_server_error or is_timeout or is_gemini_format_error):
+                    # 400 client error: sanitize 최대 3회까지만, 그 후엔 fallback
+                    if is_client_400 and is_gemini_format_error and attempt >= 3:
+                        if self.fallback_config and self.migrate_to_fallback():
+                            print(f"[Agent] 🚀 Gemini 400 format error {attempt+1}회 — sanitize 실패, fallback 전환")
+                            if "model" in kwargs: del kwargs["model"]
+                            return await self._call_llm_with_retry(**kwargs)
+                    
+                    llm_logger.warning(f"[LLM Retry] Attempt {attempt + 1}/{max_attempts} failed: {error_str[:500]}. Waiting {delay:.1f}s...")
+                    print(f"[LLM Retry] Attempt {attempt + 1}/{max_attempts} failed: {error_str[:500]}. Waiting {delay:.1f}s...")
                     await asyncio.sleep(delay)
                 elif self.fallback_config and self.migrate_to_fallback():
                     # 404나 타임아웃 등 모든 실패 상황에서 폴백 설정이 있으면 즉시 전환
@@ -438,8 +669,15 @@ class TradingAgentCore:
                     if "model" in kwargs: del kwargs["model"]
                     return await self._call_llm_with_retry(**kwargs)
                 else:
+                    import traceback as _tb
                     llm_logger.error(f"[LLM Error] Final attempt failed: {error_str}")
                     print(f"[LLM Error] Final attempt failed: {error_str}")
+                    from core.error_escalation import escalate_error
+                    escalate_error(
+                        'LLM Error Final attempt failed',
+                        f'LLM call failed after all retries: {error_str[:300]}',
+                        _tb.format_exc()
+                    )
                     return None
 
 

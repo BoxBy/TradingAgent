@@ -3,6 +3,9 @@ import config
 
 translator = None
 
+# Module-level key rotation counter for fallback_translate_gemma
+_key_rotation_index = 0
+
 if config.DEEPL_API_KEY:
     try:
         import deepl
@@ -59,7 +62,7 @@ def translate_to_korean_if_needed(message: str) -> str:
         return message
     except Exception as e:
         # DeepL 실패 시 Gemma fallback 시도
-        print(f"[Translator] DeepL 번역 오류 ({e}). Gemma-3 폴백 시도 중...")
+        print(f"[Translator] DeepL 번역 오류 ({e}). Gemma-4 폴백 시도 중...")
         try:
             return fallback_translate_gemma(message)
         except Exception as fallback_e:
@@ -78,10 +81,14 @@ def fallback_translate_gemma(text: str) -> str:
     else:
         load_dotenv()
     
-    # Try using configured Gemini API keys
+    # Try using configured Gemini API keys with rotation
+    global _key_rotation_index
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key and hasattr(config, "GEMINI_API_KEYS") and config.GEMINI_API_KEYS:
-        api_key = config.GEMINI_API_KEYS[0]
+        keys = config.GEMINI_API_KEYS
+        idx = _key_rotation_index % len(keys)
+        api_key = keys[idx]
+        _key_rotation_index += 1
         
     if not api_key:
         api_key = os.getenv("GOOGLE_API_KEY_1")
@@ -92,11 +99,10 @@ def fallback_translate_gemma(text: str) -> str:
 
     # Google's OpenAI-compatible endpoint for Gemma
     base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    model = "gemma-3-27b-it"
+    model = "gemma-4-31b-it"
 
     try:
-        # Gemma-3-27b-it on Google endpoints does not support system instructions
-        prompt = f"You are a professional English to Korean translator. Translate the following text directly to Korean without any conversational fillers or explanations.\n\n{text}"
+        prompt = f"Translate to Korean. Output ONLY the Korean translation, nothing else.\n\n{text}"
         
         client = OpenAI(api_key=api_key, base_url=base_url)
         response = client.chat.completions.create(
@@ -106,8 +112,11 @@ def fallback_translate_gemma(text: str) -> str:
             ],
             temperature=0.1
         )
-        translated = response.choices[0].message.content.strip()
-        return translated if translated else text
+        raw = response.choices[0].message.content.strip()
+        # Strip any <thought>...</thought> tags from reasoning models
+        import re as _re
+        cleaned = _re.sub(r'<thought>.*?</thought>\s*', '', raw, flags=_re.DOTALL).strip()
+        return cleaned if cleaned else text
     except Exception as e:
-        print(f"[Translator] Gemma 3 27b-it fallback error: {e}")
+        print(f"[Translator] Gemma-4-31b-it fallback error: {e}")
         return text

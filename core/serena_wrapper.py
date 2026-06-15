@@ -53,10 +53,28 @@ class SerenaWrapper:
 
     def _basic_fallback_summary(self, messages: List[Dict[str, Any]]) -> str:
         """Serena를 사용할 수 없을 경우의 기본 요약 로직"""
-        # 라이브러리가 없는 경우를 대비한 최소한의 보존 텍스트
-        last_msgs = messages[-3:] if len(messages) > 3 else messages
-        content_lines = [m.get("content", "")[:100] for m in last_msgs]
-        return f"대화 내용 압축됨 (최근 요점: {' / '.join(content_lines)}...)"
+        key_contents = []
+        for m in messages:
+            content = m.get("content", "") or ""
+            role = m.get("role", "")
+            if role == "assistant":
+                text = content[:300] if len(content) > 20 else ""
+                tool_calls = m.get("tool_calls")
+                if tool_calls:
+                    tc_names = [tc.get("function", {}).get("name", "") for tc in tool_calls if isinstance(tc, dict)]
+                    if text:
+                        text += f" [Called: {', '.join(tc_names)}]"
+                    else:
+                        text = f"[Called: {', '.join(tc_names)}]"
+                if text:
+                    key_contents.append(text)
+            elif role == "tool":
+                # tool 결과에서 핵심 데이터 추출 (시장 데이터, 포트폴리오 등)
+                key_contents.append(content[:400])
+            elif role == "user" and len(content) > 20:
+                key_contents.append(content[:150])
+        combined = "\n---\n".join(key_contents[-8:])
+        return combined[:3000] if combined else "이전 대화 컨텍스트 없음"
 
 # 싱글톤 인스턴스
 serena_engine = SerenaWrapper()

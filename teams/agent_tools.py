@@ -64,7 +64,7 @@ async def dispatch_agent_tool(tool_name: str, arguments: dict) -> str:
         try:
             import yfinance as yf
             vix_data = yf.Ticker("^VIX").history(period="1d")
-            current_vix = float(vix_data["Close"].iloc[-1]) if not vix_data.empty else 20.0
+            current_vix = vix_data["Close"].iloc[-1].item() if not vix_data.empty else 20.0
             fg = get_fear_greed_with_momentum(current_vix)
             return json.dumps({
                 "current_vix": current_vix,

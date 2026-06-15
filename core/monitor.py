@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 import pandas as pd
 
@@ -44,8 +45,17 @@ def get_system_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
-    file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+    file_handler = TimedRotatingFileHandler(
+        log_file_path, when='midnight', interval=1, backupCount=30, encoding='utf-8'
+    )
+    file_handler.suffix = '%Y-%m-%d'
     file_handler.setFormatter(formatter)
+    # Flush immediately on each log write to prevent data loss on crash
+    _orig_emit = file_handler.emit
+    def _flush_emit(record):
+        _orig_emit(record)
+        file_handler.flush()
+    file_handler.emit = _flush_emit
     logger.addHandler(file_handler)
     
     stream_handler = logging.StreamHandler()
@@ -86,7 +96,35 @@ class TradeMonitor:
         """
         Reconcile local active_trades.json with the actual broker portfolio.
         broker_portfolio is a list of dicts with 'stock_code', 'quantity', 'average_price', etc.
+        
+        Bug fix (2026-05-16): Skip sync when broker returns empty portfolio to prevent
+        wiping all positions during KIS API intermittent empty-response glitches.
         """
+        logger = logging.getLogger('main')
+        
+        # GUARD: If broker returns empty but we have existing positions, skip sync
+        # This prevents API glitches from wiping our position tracking
+        if not broker_portfolio and self.active_trades:
+            logger.warning(
+                f"[TradingClaw] Broker returned empty portfolio but {len(self.active_trades)} "
+                f"positions tracked. Skipping sync to prevent data loss (likely KIS API glitch)."
+            )
+            return False
+        
+        # Skip positions flagged as phantom (KIS has them in query but can't trade them)
+        _logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
+        _phantom_tickers = set()
+        if os.path.isdir(_logs_dir):
+            for _f in os.listdir(_logs_dir):
+                if _f.startswith("phantom_") and _f.endswith(".flag"):
+                    _phantom_tickers.add(_f.replace("phantom_", "").replace(".flag", "").upper())
+        
+        if _phantom_tickers:
+            _before = len(broker_portfolio)
+            broker_portfolio = [p for p in broker_portfolio if p.get('stock_code', '').upper() not in _phantom_tickers]
+            if len(broker_portfolio) < _before:
+                logger.info(f"[TradingClaw] Sync: filtered {_before - len(broker_portfolio)} phantom position(s) from broker data: {_phantom_tickers}")
+        
         new_active_trades = {}
         
         for item in broker_portfolio:
@@ -105,6 +143,14 @@ class TradeMonitor:
                     "status": "active",
                     "market_type": item.get('market_type', 'KR')
                 }
+        
+        # GUARD: If sync would remove ALL positions, skip (safety net)
+        if not new_active_trades and self.active_trades:
+            logger.warning(
+                f"[TradingClaw] Sync would wipe {len(self.active_trades)} positions. "
+                f"Skipping (likely KIS API glitch)."
+            )
+            return False
         
         # Only overwrite if there are changes to avoid unnecessary writes
         if new_active_trades != self.active_trades:

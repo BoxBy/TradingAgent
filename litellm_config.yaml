@@ -1,0 +1,107 @@
+model_list:
+- model_name: ta-primary
+  litellm_params:
+    model: openai/deepseek-v4-flash
+    api_key: os.environ/OPENCODE_GO_API_KEY
+    timeout: 60
+    stream_timeout: 10
+    num_retries: 0
+    api_base: https://opencode.ai/zen/go/v1
+  model_info:
+    mode: chat
+- model_name: ta-fallback-1
+  litellm_params:
+    model: openai/mimo-v2.5
+    api_key: os.environ/OPENCODE_GO_API_KEY
+    timeout: 60
+    stream_timeout: 10
+    num_retries: 0
+    api_base: https://opencode.ai/zen/go/v1
+  model_info:
+    mode: chat
+- model_name: ta-fallback-2
+  litellm_params:
+    model: openai/deepseek-v4-flash-free
+    api_key: os.environ/OPENCODE_GO_API_KEY
+    timeout: 60
+    stream_timeout: 10
+    num_retries: 0
+    api_base: https://opencode.ai/zen/v1
+  model_info:
+    mode: chat
+- model_name: ta-fallback-3
+  litellm_params:
+    model: openai/mimo-v2.5-free
+    api_key: os.environ/OPENCODE_GO_API_KEY
+    timeout: 60
+    stream_timeout: 10
+    num_retries: 0
+    api_base: https://opencode.ai/zen/v1
+  model_info:
+    mode: chat
+- model_name: ta-fallback-4
+  litellm_params:
+    model: nvidia_nim/deepseek-ai/deepseek-v4-pro
+    api_key: os.environ/NVIDIA_API_KEY
+    timeout: 30
+    stream_timeout: 10
+    num_retries: 0
+  model_info:
+    mode: chat
+- model_name: ta-fallback-5
+  litellm_params:
+    model: nvidia_nim/stepfun-ai/step-3.7-flash
+    api_key: os.environ/NVIDIA_API_KEY
+    timeout: 30
+    stream_timeout: 10
+    num_retries: 0
+  model_info:
+    mode: chat
+- model_name: ta-mimo-v2.5
+  litellm_params:
+    model: nvidia_nim/qwen/qwen3.5-397b-a17b
+    api_key: os.environ/NVIDIA_API_KEY
+    timeout: 30
+    stream_timeout: 10
+    num_retries: 0
+  model_info:
+    mode: chat
+router_settings:
+  fallbacks:
+  - ta-primary:
+    - ta-fallback-1
+    - ta-fallback-2
+    - ta-fallback-3
+    - ta-fallback-4
+    - ta-fallback-5
+    - ta-mimo-v2.5
+  - ta-fallback-1:
+    - ta-fallback-2
+    - ta-fallback-3
+    - ta-fallback-4
+    - ta-fallback-5
+    - ta-mimo-v2.5
+  - ta-fallback-2:
+    - ta-fallback-3
+    - ta-fallback-4
+    - ta-fallback-5
+    - ta-mimo-v2.5
+  - ta-fallback-3:
+    - ta-fallback-4
+    - ta-fallback-5
+    - ta-mimo-v2.5
+  - ta-fallback-4:
+    - ta-fallback-5
+    - ta-mimo-v2.5
+  - ta-fallback-5:
+    - ta-mimo-v2.5
+  allowed_fails: 3
+  cooldown_time: 60
+litellm_settings:
+  num_retries: 2
+  request_timeout: 60
+  drop_params: true
+  callbacks:
+  - ttft_callback.ttft_callback
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

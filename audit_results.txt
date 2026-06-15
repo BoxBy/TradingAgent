@@ -1,0 +1,17 @@
+Liquidation List:
+- 000660: 10 shares
+- 005930: 20 shares
+- AMD: 88 shares
+- META: 28 shares
+- NVDA: 180 shares
+
+Estimated Liquidation Proceeds (KRW):
+- KR assets: 15,600,000 KRW
+- US assets: ~112,112,168 KRW (at 1400 KRW/USD)
+- Current Cash: 36,774,630 KRW
+- Total Portfolio Value (approx): 164,486,798 KRW
+
+Net Available Buying Power (after 20% reserve):
+- Total: 164,486,798 KRW
+- 20% Reserve: 32,897,360 KRW
+- Net Available: 131,589,438 KRW

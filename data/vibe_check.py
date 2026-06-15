@@ -23,8 +23,8 @@ def get_comparative_vibe(tickers: List[str], period: str = "1mo") -> str:
             original_t = tickers[0]
             if data.empty:
                 return f"No data found for {t}."
-            start_price = float(data['Close'].iloc[0])
-            end_price = float(data['Close'].iloc[-1])
+            start_price = data['Close'].iloc[0].item()
+            end_price = data['Close'].iloc[-1].item()
             ret = ((end_price - start_price) / start_price) * 100
             
             vibe_report += f"[{t}] Start: {start_price:.2f} -> End: {end_price:.2f} | Return: {ret:+.2f}%\n"
@@ -39,8 +39,8 @@ def get_comparative_vibe(tickers: List[str], period: str = "1mo") -> str:
                 vibe_report += f"[{original_t}] No data available.\n"
                 continue
                 
-            start_price = float(df['Close'].dropna().iloc[0])
-            end_price = float(df['Close'].dropna().iloc[-1])
+            start_price = df['Close'].dropna().iloc[0].item()
+            end_price = df['Close'].dropna().iloc[-1].item()
             ret = ((end_price - start_price) / start_price) * 100
             results.append({"ticker": original_t, "return": ret, "start": start_price, "end": end_price})
             

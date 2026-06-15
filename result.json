@@ -1,0 +1,15 @@
+{
+  "dynamic_vix_threshold": 30.0,
+  "recommended_cycle_target_profit_pct": 3.5,
+  "recommended_cycle_stop_loss_pct": -3.5,
+  "buy_conviction_threshold": 5.8,
+  "sell_conviction_threshold": -5.8,
+  "confidence": 0.75,
+  "ttl_minutes": 60,
+  "reasoning": "Market is in a standard trading environment (VIX 18.43, Sentiment 50) but faces heightened geopolitical risk regarding Middle Eastern energy supply chains. Aggressive deployment is recommended to meet 20% monthly target, but with a 3.5% stop-loss to protect against sudden geopolitical shocks. Energy and infrastructure are high-conviction themes due to supply concerns and the need for alternative energy sources.",
+  "top_sectors": [
+    "Energy",
+    "Defense",
+    "Infrastructure"
+  ]
+}

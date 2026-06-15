@@ -5,12 +5,28 @@ import config
 
 log = get_system_logger(__name__)
 
-def send_notification(message: str, channel: str = "#stock_report"):
+def send_notification(message: str, channel: str = "#stock_report",
+                      source: str = None, category: str = None):
     """
     Sends a message to a Discord or Slack webhook URL.
     Checks environment configurations for the endpoint.
     Translates English to Korean for Slack notification (user convenience).
+
+    Args:
+        source: Agent name to prefix the message with (e.g. "Orchestrator").
+        category: Notification category for filtering. If in NOTIFICATION_BLOCKED, the message is skipped.
+                  Available: "system", "cycle_report", "decomposition", "trade", "order_rejected", "emergency"
     """
+    # Filter: skip blocked categories
+    blocked = getattr(config, "NOTIFICATION_BLOCKED", [])
+    if category and category in blocked:
+        log.info(f"Notification filtered (category={category}): {message[:80]}")
+        return
+
+    # Prefix with agent source
+    if source:
+        message = f"[{source}] {message}"
+
     # Try config first (ensures consistent loading via dotenv), fallback to os.getenv for Discord
     webhook_url = config.SLACK_WEBHOOK_URL or os.getenv("DISCORD_WEBHOOK_URL")
 

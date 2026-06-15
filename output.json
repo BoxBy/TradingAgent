@@ -1,0 +1,11 @@
+{
+  "us_tickers": ["LLY", "INTC", "WFC", "GS", "AMZN"],
+  "kr_tickers": ["098630"],
+  "catalysts": [
+    {
+      "ticker": "LLY",
+      "event": "FDA approval of Foundayo obesity pill",
+      "date": "2026-04-01"
+    }
+  ]
+}
